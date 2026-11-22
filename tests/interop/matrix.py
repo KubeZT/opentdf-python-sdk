@@ -37,7 +37,7 @@ def invoke(
     args = [operation, str(source), str(output), *map(str, arguments)]
     if peer == "java":
         args = [f"-Dexec.args={shlex.join(args)}"]
-        if operation in ("open", "open-features"):
+        if operation in ("open", "open-features", "open-assertions"):
             driver = [*driver[:-2], "exec:java"]
     result = subprocess.run(
         driver + args,
@@ -265,6 +265,33 @@ def empty_round_trips(work: Path, commands: dict[str, list[str]]) -> None:
                 print(f"{artifact.stem} → {reader} passed", flush=True)
 
 
+def compare_feature_archives(
+    work: Path,
+    commands: dict[str, list[str]],
+    archives: dict[Path, str],
+    original: bytes,
+    operation: str,
+    argument: Path,
+) -> None:
+    def compare(reader: str, artifact: Path) -> None:
+        output = work / f"{artifact.stem}-to-{reader}.bin"
+        invoke(reader, commands[reader], operation, artifact, output, argument)
+        if output.read_bytes() != original:
+            raise ValueError(f"{artifact.name} to {reader} recovered different bytes")
+        print(f"{artifact.stem} → {reader} passed", flush=True)
+
+    for reader in ("rust", "python", "go"):
+        for artifact in archives:
+            compare(reader, artifact)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(
+            pool.map(
+                lambda artifact: compare("java", artifact),
+                (p for p, profile in archives.items() if profile == JAVA_MANIFEST),
+            )
+        )
+
+
 def feature_round_trips(
     work: Path, commands: dict[str, list[str]], attributes: list[str]
 ) -> None:
@@ -305,23 +332,9 @@ def feature_round_trips(
                 raise ValueError(f"{artifact.name} exposes the plaintext metadata")
             archives[artifact] = manifest_name
 
-    def compare(reader: str, artifact: Path) -> None:
-        output = work / f"{artifact.stem}-to-{reader}.bin"
-        invoke(reader, commands[reader], "open-features", artifact, output, metadata)
-        if output.read_bytes() != original:
-            raise ValueError(f"{artifact.name} to {reader} recovered different bytes")
-        print(f"{artifact.stem} → {reader} passed", flush=True)
-
-    for reader in ("rust", "python", "go"):
-        for artifact in archives:
-            compare(reader, artifact)
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(
-            pool.map(
-                lambda artifact: compare("java", artifact),
-                (p for p, profile in archives.items() if profile == JAVA_MANIFEST),
-            )
-        )
+    compare_feature_archives(
+        work, commands, archives, original, "open-features", metadata
+    )
 
     one_attribute = work / "one-all-of-value.tdf"
     invoke(
@@ -391,6 +404,106 @@ def feature_round_trips(
     print("All-of entitlement and encrypted metadata tamper checks passed", flush=True)
 
 
+def assertion_round_trips(
+    work: Path, commands: dict[str, list[str]], source: Path, original: bytes
+) -> None:
+    def generate_key(name: str) -> tuple[Path, Path]:
+        private = work / f"{name}-private.pem"
+        public = work / f"{name}-public.pem"
+        for args in (
+            [
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+                str(private),
+            ],
+            ["pkey", "-in", str(private), "-pubout", "-out", str(public)],
+        ):
+            subprocess.run(
+                ["openssl", *args], check=True, capture_output=True, timeout=30
+            )
+        return private, public
+
+    private, public = generate_key("publisher")
+    _, wrong_key = generate_key("wrong-publisher")
+    archives = {}
+    for writer in commands:
+        profiles = ("legacy", "spec") if writer in ("rust", "python") else ("legacy",)
+        for profile in profiles:
+            artifact = work / f"{writer}-{profile}-assertions.tdf"
+            invoke(
+                writer,
+                commands[writer],
+                "create-spec-assertions" if profile == "spec" else "create-assertions",
+                source,
+                artifact,
+                private,
+            )
+            manifest_name = SPEC_MANIFEST if profile == "spec" else JAVA_MANIFEST
+            manifest, _ = read_archive(artifact, manifest_name)
+            assertions = manifest["assertions"]
+            algorithms = {}
+            for assertion in assertions:
+                header = assertion["binding"]["signature"].split(".")[0]
+                protected = json.loads(
+                    base64.urlsafe_b64decode(header + "=" * (-len(header) % 4))
+                )
+                algorithms[assertion["id"]] = protected["alg"]
+            if len(assertions) != 2 or algorithms != {
+                "tdf-binding": "HS256",
+                "publisher": "RS256",
+            }:
+                raise ValueError(f"{artifact.name} has unexpected assertions")
+            archives[artifact] = manifest_name
+    compare_feature_archives(
+        work, commands, archives, original, "open-assertions", public
+    )
+
+    java, _ = read_archive(work / "java-legacy-assertions.tdf", JAVA_MANIFEST)
+    publisher = next(item for item in java["assertions"] if item["id"] == "publisher")
+    spec = work / "rust-spec-assertions.tdf"
+    manifest, payload = read_archive(spec, SPEC_MANIFEST)
+    tampered = copy.deepcopy(manifest)
+    tampered["assertions"][0]["statement"]["value"] += " changed"
+    transplanted = copy.deepcopy(manifest)
+    transplanted["assertions"] = [transplanted["assertions"][0], publisher]
+    missing = copy.deepcopy(manifest)
+    missing["assertions"] = [missing["assertions"][0]]
+    cases = {
+        label: write_archive(work / f"assertions-{label}.tdf", altered, payload)
+        for label, altered in (
+            ("tampered", tampered),
+            ("transplanted", transplanted),
+            ("missing", missing),
+        )
+    }
+    for reader in ("rust", "python"):
+        output = work / f"{reader}-rejected-assertions.bin"
+        before = set(work.iterdir())
+        for artifact, key in [
+            *((artifact, public) for artifact in cases.values()),
+            (spec, wrong_key),
+        ]:
+            invoke(
+                reader,
+                commands[reader],
+                "open-assertions",
+                artifact,
+                output,
+                key,
+                expected_error="Invalid" if reader == "rust" else "TDF error:",
+            )
+        if set(work.iterdir()) != before:
+            raise ValueError(f"{reader} left output files after rejecting an assertion")
+    print(
+        "Assertion tamper, transplant, missing ID, and wrong-key checks passed",
+        flush=True,
+    )
+
+
 def check_shared_harness(rust_root: Path, python_root: Path) -> None:
     shared = (
         "tests/interop/README.md",
@@ -412,6 +525,7 @@ def check_shared_harness(rust_root: Path, python_root: Path) -> None:
         "tests/conformance/README.md",
         "tests/vectors/zip-profile-v1.json",
         "docs/capabilities.md",
+        "docs/conformance.md",
     )
     for path in shared:
         if (rust_root / path).read_bytes() != (python_root / path).read_bytes():
@@ -473,6 +587,7 @@ def main() -> None:
             "compile",
             "exec:java",
         ]
+        assertion_round_trips(work, commands, source, original)
         archives = {}
         for peer in commands:
             for profile in (

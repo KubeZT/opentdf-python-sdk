@@ -4,6 +4,8 @@ Run `make check` for offline unit, integration, and conformance tests.
 Run `make test-e2e` for downstream package tests against a fresh local KAS.
 The [interoperability guide](../tests/interop/README.md) has the setup. The
 [capability matrix](capabilities.md) lists the verified reader and writer pairs.
+Run `make test-conformance` for the shared offline corpus. See the
+[coverage audit](conformance.md) for the specification and upstream test inventory.
 
 | Reference | Pin |
 | --- | --- |

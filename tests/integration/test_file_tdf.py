@@ -9,10 +9,14 @@ from typing import Any, Literal
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from opentdf_sdk import (
     AccessDenied,
+    AssertionConfig,
+    AssertionStatement,
     TdfError,
     _tdf,
     create_tdf,
@@ -677,3 +681,182 @@ def test_rejects_dangling_destination_before_file_io(
     assert destination.readlink() == missing
     assert not missing.exists()
     assert not list(tmp_path.glob(".tdf-*"))
+
+
+@pytest.fixture(scope="module")
+def assertion_keys() -> tuple[bytes, bytes, bytes]:
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    different_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return (
+        rsa_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ),
+        rsa_key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        ),
+        different_key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        ),
+    )
+
+
+def _assertion(id_: str, signing_key: bytes | None = None) -> AssertionConfig:
+    return AssertionConfig(
+        id_,
+        "handling",
+        "payload",
+        "unencrypted",
+        AssertionStatement("string", "urn:test:assertion", '日本語\n"line two"'),
+        signing_key,
+    )
+
+
+@pytest.mark.parametrize("profile", ["java", "spec"])
+def test_signed_assertion_round_trip(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    assertion_keys: tuple[bytes, bytes, bytes],
+    profile: Literal["java", "spec"],
+) -> None:
+    private_key, public_key, _ = assertion_keys
+    source = tmp_path / "source"
+    source.write_bytes(b"checked payload")
+    container = tmp_path / "archive.tdf"
+    create_tdf(
+        source,
+        container,
+        kas_url=_KAS_URL,
+        access_token="test",
+        attribute=_ATTRIBUTE,
+        assertions=[_assertion("tdf"), _assertion("publisher", private_key)],
+        metadata="encrypted metadata",
+        profile=profile,
+    )
+    destination = tmp_path / "plaintext"
+    assert (
+        open_tdf_with_metadata(
+            container,
+            destination,
+            kas_url=_KAS_URL,
+            access_token="test",
+            required_assertions=("tdf", "publisher"),
+            assertion_verification_keys={"publisher": public_key},
+        )
+        == "encrypted metadata"
+    )
+    assert destination.read_bytes() == source.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("statement", "content or payload binding failed"),
+        ("signature", "signature verification failed"),
+        ("wrong_key", "signature verification failed"),
+        ("no_key", "Unexpected assertion algorithm"),
+        ("required", "Required assertion is missing"),
+        ("downgrade", "Unexpected assertion algorithm"),
+        ("duplicate", "Duplicate assertion ID"),
+    ],
+)
+def test_assertion_rejection_publishes_no_plaintext(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    assertion_keys: tuple[bytes, bytes, bytes],
+    change: str,
+    message: str,
+) -> None:
+    private_key, public_key, wrong_key = assertion_keys
+    source = tmp_path / "source"
+    source.write_bytes(b"must not publish")
+    container = tmp_path / "archive.tdf"
+    create_tdf(
+        source,
+        container,
+        kas_url=_KAS_URL,
+        access_token="test",
+        attribute=_ATTRIBUTE,
+        assertions=[
+            _assertion("publisher", None if change == "downgrade" else private_key)
+        ],
+    )
+    verification_keys = {"publisher": public_key}
+    with ZipFile(container) as archive:
+        manifest = json.loads(archive.read("0.manifest.json"))
+        payload = archive.read("0.payload")
+    assertion = manifest["assertions"][0]
+    if change == "statement":
+        assertion["statement"]["value"] = "altered"
+    elif change == "required":
+        manifest["assertions"] = []
+    elif change == "signature":
+        header, claims, sig = assertion["binding"]["signature"].split(".")
+        altered = ("B" if sig[0] == "A" else "A") + sig[1:]
+        assertion["binding"]["signature"] = ".".join((header, claims, altered))
+    elif change == "wrong_key":
+        verification_keys = {"publisher": wrong_key}
+    elif change == "no_key":
+        verification_keys = {}
+    elif change == "duplicate":
+        manifest["assertions"].append(assertion)
+    with ZipFile(container, "w") as archive:
+        archive.writestr("0.payload", payload)
+        archive.writestr("0.manifest.json", json.dumps(manifest))
+    destination = tmp_path / "plaintext"
+    with pytest.raises(TdfError, match=message):
+        open_tdf(
+            container,
+            destination,
+            kas_url=_KAS_URL,
+            access_token="test",
+            required_assertions=["publisher"],
+            assertion_verification_keys=verification_keys,
+        )
+    assert not destination.exists()
+    assert not any(tmp_path.glob(".tdf-*"))
+
+
+def test_rsa_assertion_cannot_be_replayed_on_another_payload(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    assertion_keys: tuple[bytes, bytes, bytes],
+) -> None:
+    private_key, public_key, _ = assertion_keys
+    source = tmp_path / "source"
+    container = tmp_path / "archive.tdf"
+    source.write_bytes(b"original")
+    create_tdf(
+        source,
+        container,
+        kas_url=_KAS_URL,
+        access_token="test",
+        attribute=_ATTRIBUTE,
+        assertions=[_assertion("publisher", private_key)],
+    )
+    with ZipFile(container) as archive:
+        assertions = json.loads(archive.read("0.manifest.json"))["assertions"]
+
+    source.write_bytes(b"different payload")
+    new_container = tmp_path / "different.tdf"
+    _create(source, new_container)
+    with ZipFile(new_container) as archive:
+        manifest = json.loads(archive.read("0.manifest.json"))
+        payload = archive.read("0.payload")
+    manifest["assertions"] = assertions
+    with ZipFile(new_container, "w") as archive:
+        archive.writestr("0.payload", payload)
+        archive.writestr("0.manifest.json", json.dumps(manifest))
+
+    destination = tmp_path / "plaintext"
+    with pytest.raises(TdfError, match="payload binding failed"):
+        open_tdf(
+            new_container,
+            destination,
+            kas_url=_KAS_URL,
+            access_token="test",
+            required_assertions=["publisher"],
+            assertion_verification_keys={"publisher": public_key},
+        )
+    assert not destination.exists()

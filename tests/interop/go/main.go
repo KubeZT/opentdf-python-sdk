@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,7 +19,9 @@ func run(args []string) error {
 		return fmt.Errorf(`usage:
   go-driver create|open INPUT OUTPUT
   go-driver create-features INPUT OUTPUT METADATA_FILE ATTRIBUTE [ATTRIBUTE ...]
-  go-driver open-features INPUT OUTPUT EXPECTED_METADATA_FILE`)
+  go-driver open-features INPUT OUTPUT EXPECTED_METADATA_FILE
+  go-driver create-assertions INPUT OUTPUT PRIVATE_PEM
+  go-driver open-assertions INPUT OUTPUT PUBLIC_PEM`)
 	}
 
 	platform, err := endpoint("OTDF_PLATFORM_URL")
@@ -56,7 +61,7 @@ func run(args []string) error {
 	}
 	defer os.Remove(output.Name())
 	defer output.Close()
-	if args[0] == "create" || args[0] == "create-features" {
+	if args[0] == "create" || args[0] == "create-features" || args[0] == "create-assertions" {
 		err = create(client, input, output, kas.String(), args)
 	} else {
 		err = open(client, input, output, kas.String(), args)
@@ -79,7 +84,7 @@ func validArgs(args []string) bool {
 		return len(args) == 3
 	case "create-features":
 		return len(args) >= 5
-	case "open-features":
+	case "open-features", "create-assertions", "open-assertions":
 		return len(args) == 4
 	default:
 		return false
@@ -107,7 +112,7 @@ func create(client *sdk.SDK, input, output *os.File, kas string, args []string) 
 		attributes = []string{attribute}
 	}
 
-	_, err := client.CreateTDF(output, input,
+	options := []sdk.TDFOption{
 		sdk.WithAutoconfigure(false),
 		sdk.WithKasInformation(sdk.KASInfo{
 			URL: kas, KID: os.Getenv("OTDF_KAS_KEY_ID"), Algorithm: "rsa:2048",
@@ -115,12 +120,51 @@ func create(client *sdk.SDK, input, output *os.File, kas string, args []string) 
 		sdk.WithDataAttributes(attributes...),
 		sdk.WithMetaData(string(metadata)),
 		sdk.WithTargetMode("4.3.0"),
-	)
+	}
+	if args[0] == "create-assertions" {
+		der, err := readPEM(args[3], "PRIVATE KEY")
+		if err != nil {
+			return err
+		}
+		key, err := x509.ParsePKCS8PrivateKey(der)
+		if err != nil {
+			return err
+		}
+		privateKey, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("expected an RSA private key")
+		}
+		binding := assertion("tdf-binding", sdk.HandlingAssertion, "tdf assertion")
+		publisher := assertion("publisher", sdk.BaseAssertion, "publisher assertion")
+		publisher.SigningKey = sdk.AssertionKey{Alg: sdk.AssertionKeyAlgRS256, Key: privateKey}
+		options = append(options, sdk.WithAssertions(binding, publisher))
+	}
+	_, err := client.CreateTDF(output, input, options...)
 	return err
 }
 
 func open(client *sdk.SDK, input, output *os.File, kas string, args []string) error {
-	tdf, err := client.LoadTDF(input, sdk.WithKasAllowlist([]string{kas}))
+	options := []sdk.TDFReaderOption{sdk.WithKasAllowlist([]string{kas})}
+	if args[0] == "open-assertions" {
+		der, err := readPEM(args[3], "PUBLIC KEY")
+		if err != nil {
+			return err
+		}
+		key, err := x509.ParsePKIXPublicKey(der)
+		if err != nil {
+			return err
+		}
+		publicKey, ok := key.(*rsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("expected an RSA public key")
+		}
+		options = append(options, sdk.WithAssertionVerificationKeys(sdk.AssertionVerificationKeys{
+			Keys: map[string]sdk.AssertionKey{
+				"publisher": {Alg: sdk.AssertionKeyAlgRS256, Key: publicKey},
+			},
+		}))
+	}
+	tdf, err := client.LoadTDF(input, options...)
 	if err != nil {
 		return err
 	}
@@ -137,8 +181,37 @@ func open(client *sdk.SDK, input, output *os.File, kas string, args []string) er
 			return fmt.Errorf("decrypted metadata differs")
 		}
 	}
+	if args[0] == "open-assertions" {
+		assertions := tdf.Manifest().Assertions
+		if len(assertions) != 2 {
+			return fmt.Errorf("expected exactly two assertions")
+		}
+		ids := map[string]bool{assertions[0].ID: true, assertions[1].ID: true}
+		if !ids["tdf-binding"] || !ids["publisher"] {
+			return fmt.Errorf("missing required assertions")
+		}
+	}
 	_, err = tdf.WriteTo(output)
 	return err
+}
+
+func assertion(id string, kind sdk.AssertionType, value string) sdk.AssertionConfig {
+	return sdk.AssertionConfig{
+		ID: id, Type: kind, Scope: sdk.PayloadScope, AppliesToState: sdk.Unencrypted,
+		Statement: sdk.Statement{Format: "text/plain", Schema: "urn:opentdf:test:assertion", Value: value},
+	}
+}
+
+func readPEM(path, kind string) ([]byte, error) {
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, rest := pem.Decode(encoded)
+	if block == nil || block.Type != kind || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("expected a PEM %s", kind)
+	}
+	return block.Bytes, nil
 }
 
 func endpoint(name string) (*url.URL, error) {

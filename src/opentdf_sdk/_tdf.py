@@ -1,15 +1,14 @@
 import hmac
-import json
 import os
 import re
 import stat
 import struct
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from io import BufferedReader
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import IO, Any, Literal, cast
+from typing import IO, Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 from zipfile import ZIP64_LIMIT, ZIP_STORED, BadZipFile, ZipExtFile, ZipFile
@@ -18,6 +17,15 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from ._assertions import (
+    AssertionConfig,
+    parse_assertions,
+    prepare_assertions,
+    sign_assertions,
+    verify_assertions,
+)
+from ._json import json_object as _object
+from ._json import parse_object as _parse
 from ._kas import Kas, TdfError, decode, encode, utf8_json
 
 JAVA_MANIFEST = "0.manifest.json"
@@ -167,6 +175,7 @@ def create_tdf(
     attribute: str | None = None,
     attributes: Sequence[str] | None = None,
     metadata: str | None = None,
+    assertions: Sequence[AssertionConfig] = (),
     key_id: str | None = None,
     profile: Literal["java", "spec"] = "java",
     manifest_kas_url: str | None = None,
@@ -176,7 +185,8 @@ def create_tdf(
     The default matches Java SDK 0.19.1. The spec profile uses the manifest
     filename, version field, and policy HMAC encoding from OpenTDF 4.3.0.
     Pass one attribute or a sequence of distinct attributes. Nonempty metadata
-    is encrypted with the same key as the payload.
+    is encrypted with the same key as the payload. Assertion statements are
+    stored in the manifest and signed with the data key or a supplied RSA key.
     Supply manifest_kas_url to record a different KAS origin in the archive.
     Supports plaintext files up to 2 TiB. HTTP requests use kas_url.
     """
@@ -206,6 +216,7 @@ def create_tdf(
             }
         )
     )
+    prepared = prepare_assertions(assertions, MAX_MANIFEST - len(policy))
     kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
     with (
         _input(source, MAX_PLAINTEXT, "Source exceeded 2 TiB") as (plaintext, length),
@@ -270,7 +281,12 @@ def create_tdf(
                 {
                     **manifest,
                     "payload": payload_info,
-                    "assertions": [],
+                    "assertions": sign_assertions(
+                        prepared,
+                        key,
+                        bytes(tags),
+                        MAX_MANIFEST - len(policy) - len(encrypted_metadata),
+                    ),
                     "encryptionInformation": {
                         "type": "split",
                         "policy": policy,
@@ -312,35 +328,6 @@ def create_tdf(
             if len(manifest_bytes) > MAX_MANIFEST:
                 raise TdfError("Manifest exceeded 4 MiB")
             archive.writestr(SPEC_MANIFEST if spec else JAVA_MANIFEST, manifest_bytes)
-
-
-def _object(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise TdfError("Expected a JSON object")
-    return value
-
-
-def _unique_object(entries: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, part in entries:
-        if key in value:
-            raise TdfError("Duplicate JSON field")
-        value[key] = part
-    return value
-
-
-def _reject_constant(value: str) -> None:
-    raise TdfError("Invalid JSON number")
-
-
-def _parse(data: bytes) -> dict[str, Any]:
-    return _object(
-        json.loads(
-            data.decode("utf-8"),
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_constant,
-        )
-    )
 
 
 def _metadata_ciphertext(value: object) -> bytes | None:
@@ -398,7 +385,13 @@ def _check_directory(file: IO[bytes], length: int) -> None:
         raise TdfError("Invalid ZIP directory")
 
 
-def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> str | None:
+def _read(
+    archive: ZipFile,
+    output: IO[bytes],
+    kas: Kas,
+    required_assertions: Sequence[str],
+    assertion_verification_keys: Mapping[str, bytes],
+) -> str | None:
     entries = archive.infolist()
     names = {info.filename for info in entries}
     spec = SPEC_MANIFEST in names
@@ -419,6 +412,7 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> str | None:
     if manifest_entry.file_size > MAX_MANIFEST:
         raise TdfError("Manifest exceeded 4 MiB")
     manifest = _parse(archive.read(manifest_entry))
+    assertions = parse_assertions(manifest.get("assertions", []), required_assertions)
     payload = _object(manifest.get("payload"))
     if spec:
         version_matches = (
@@ -434,7 +428,6 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> str | None:
     if (
         not version_matches
         or "tdf_spec_version" in manifest
-        or manifest.get("assertions", []) != []
         or payload.get("type") != "reference"
         or payload.get("protocol") != "zip"
         or payload.get("isEncrypted") is not True
@@ -540,10 +533,10 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> str | None:
         key = kas.unwrap(policy, key_access)
         if not hmac.compare_digest(_policy_hash(key, policy, spec=spec), binding_hash):
             raise TdfError("Policy binding failed")
-        if not hmac.compare_digest(
-            _mac(key, b"".join(tag for _, _, tag in validated_segments)), root_hash
-        ):
+        tags = b"".join(tag for _, _, tag in validated_segments)
+        if not hmac.compare_digest(_mac(key, tags), root_hash):
             raise TdfError("Root integrity check failed")
+        verify_assertions(assertions, key, tags, assertion_verification_keys)
         metadata = None
         metadata_nonce = None
         if metadata_ciphertext is not None:
@@ -587,6 +580,8 @@ def open_tdf(
     kas_url: str,
     access_token: str,
     manifest_kas_url: str | None = None,
+    required_assertions: Sequence[str] = (),
+    assertion_verification_keys: Mapping[str, bytes] | None = None,
 ) -> None:
     """Open a supported TDF ZIP profile and discard any authenticated metadata."""
     open_tdf_with_metadata(
@@ -595,6 +590,8 @@ def open_tdf(
         kas_url=kas_url,
         access_token=access_token,
         manifest_kas_url=manifest_kas_url,
+        required_assertions=required_assertions,
+        assertion_verification_keys=assertion_verification_keys,
     )
 
 
@@ -605,11 +602,16 @@ def open_tdf_with_metadata(
     kas_url: str,
     access_token: str,
     manifest_kas_url: str | None = None,
+    required_assertions: Sequence[str] = (),
+    assertion_verification_keys: Mapping[str, bytes] | None = None,
 ) -> str | None:
     """Open a supported TDF ZIP profile and return its metadata if present.
 
     Only the configured manifest_kas_url, or kas_url by default, is accepted
     in the key access object. HTTP requests use kas_url.
+
+    Present assertions must verify. Specify required assertion IDs to require
+    their presence and map RS256 assertion IDs to trusted RSA public keys in PEM.
     """
     kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
     try:
@@ -622,7 +624,13 @@ def open_tdf_with_metadata(
         ):
             _check_directory(content, length)
             with ZipFile(content) as archive:
-                metadata = _read(archive, output, kas)
+                metadata = _read(
+                    archive,
+                    output,
+                    kas,
+                    required_assertions,
+                    assertion_verification_keys or {},
+                )
             if os.fstat(content.fileno()).st_size != length:
                 raise TdfError("TDF size changed while reading")
             return metadata

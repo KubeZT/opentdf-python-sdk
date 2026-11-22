@@ -14,6 +14,10 @@ format:
 test:
 	$(PYTHON) -m pytest
 
+.PHONY: test-conformance
+test-conformance:
+	$(PYTHON) -m pytest tests/conformance
+
 package:
 	$(PYTHON) -m build --no-isolation
 

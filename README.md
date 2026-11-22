@@ -52,6 +52,12 @@ up to 64 MiB for large files. KAS denial raises `AccessDenied` and leaves
 the destination absent. These profiles cover a subset of the TDF
 specification.
 
+Pass `assertions=[AssertionConfig(...)]` to sign assertions. Omit the signing
+key to use the TDF's key with HS256, or pass a private RSA PEM in
+`signing_key_pem` for RS256. On open, use `required_assertions` to require
+assertion IDs and `assertion_verification_keys` to supply trusted RS256
+public keys by ID.
+
 ## Use a trusted KAS endpoint for an archived origin
 
 When the archive names a KAS origin that differs from your reachable

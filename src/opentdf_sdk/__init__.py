@@ -2,11 +2,14 @@
 
 from importlib import metadata as _metadata
 
+from ._assertions import AssertionConfig, AssertionStatement
 from ._kas import AccessDenied, TdfError
 from ._tdf import create_tdf, open_tdf, open_tdf_with_metadata
 
 __all__ = [
     "AccessDenied",
+    "AssertionConfig",
+    "AssertionStatement",
     "TdfError",
     "create_tdf",
     "open_tdf",

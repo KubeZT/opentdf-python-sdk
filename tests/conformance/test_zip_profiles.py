@@ -28,6 +28,11 @@ def _write_case(path: Path, profile: str, case: dict[str, Any]) -> None:
     manifest = copy.deepcopy(_CORPUS["manifests"][profile])
     manifest_name = _MANIFEST_NAMES[profile]
     payload = bytearray(base64.b64decode(_CORPUS["encrypted_payload"]))
+    if "assertions" in case:
+        manifest["assertions"] = [
+            copy.deepcopy(_CORPUS["known_assertions"][name])
+            for name in case["assertions"]
+        ]
     for pointer, value in case.get("set", {}).items():
         parent, field = _target(manifest, pointer)
         parent[field] = value
@@ -91,13 +96,26 @@ def test_shared_zip_profile_conformance(
 
     monkeypatch.setattr(Kas, "unwrap", rewrap)
     expected = case["expect"]
-    options = dict(kas_url=_CORPUS["kas_url"], access_token="test")
+
+    def open_case() -> None:
+        open_tdf(
+            source,
+            dest,
+            kas_url=_CORPUS["kas_url"],
+            access_token="test",
+            required_assertions=case.get("required_assertions", ()),
+            assertion_verification_keys={
+                id_: _CORPUS["assertion_public_keys"][name].encode("ascii")
+                for id_, name in case.get("assertion_keys", {}).items()
+            },
+        )
+
     if expected == "accept":
-        open_tdf(source, dest, **options)
+        open_case()
         assert called
         assert dest.read_bytes() == base64.b64decode(_CORPUS["plaintext"])
     else:
         with pytest.raises(TdfError):
-            open_tdf(source, dest, **options)
+            open_case()
         assert called is (expected == "reject-after-key")
         assert list(tmp_path.iterdir()) == [source]

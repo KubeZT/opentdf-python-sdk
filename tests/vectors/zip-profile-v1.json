@@ -396,6 +396,263 @@
       "set": {
         "/encryptionInformation/keyAccess/0/policyBinding/hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
       }
+    },
+    {
+      "id": "ASSERTION-HS256",
+      "expect": "accept",
+      "assertions": [
+        "hs"
+      ],
+      "required_assertions": [
+        "tdf-binding"
+      ]
+    },
+    {
+      "id": "ASSERTION-HS256-MINIMAL",
+      "expect": "accept",
+      "assertions": [
+        "hs-minimal"
+      ]
+    },
+    {
+      "id": "ASSERTION-HS256-RS256",
+      "expect": "accept",
+      "assertions": [
+        "hs",
+        "rs"
+      ],
+      "required_assertions": [
+        "tdf-binding",
+        "publisher"
+      ],
+      "assertion_keys": {
+        "publisher": "publisher"
+      }
+    },
+    {
+      "id": "ASSERTION-UPPERCASE-METHOD",
+      "expect": "accept",
+      "assertions": [
+        "hs",
+        "rs"
+      ],
+      "assertion_keys": {
+        "publisher": "publisher"
+      },
+      "set": {
+        "/assertions/0/binding/method": "JWS",
+        "/assertions/1/binding/method": "JWS"
+      }
+    },
+    {
+      "id": "ASSERTION-DUPLICATE-ID",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs",
+        "hs"
+      ]
+    },
+    {
+      "id": "ASSERTION-MISSING-REQUIRED",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "required_assertions": [
+        "tdf-binding",
+        "publisher"
+      ],
+      "assertion_keys": {
+        "publisher": "publisher"
+      }
+    },
+    {
+      "id": "ASSERTION-MISSING-BINDING",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "remove": [
+        "/assertions/0/binding"
+      ]
+    },
+    {
+      "id": "ASSERTION-UNKNOWN-METHOD",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/binding/method": "unknown"
+      }
+    },
+    {
+      "id": "ASSERTION-STATEMENT-TAMPER",
+      "expect": "reject-after-key",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/statement/value": "changed"
+      }
+    },
+    {
+      "id": "ASSERTION-SIGNATURE-TAMPER",
+      "expect": "reject-after-key",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/binding/signature": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NlcnRpb25IYXNoIjoiNWI4NjNiYjQ1NmIwYmE3YjQ0ZDI3YmEyNmY5ZTlhMjczNjcwMjY2NWExMjhiMTYwNzk0NWNmYTZhYmY0YzMxNyIsImFzc2VydGlvblNpZyI6InFPVlhkNEV2b3JRb214OFViOVI5bmJpYlAwWUtOVHBLSWFFMXA2c2ZnOGRiaGp1MFZyQzZlMFRTZTZKdm5wb25ObkFtWmFFb3NXQjVSYyttcS9UREZ3PT0ifQ.AUqNSz-uyvliA4yWvaR5KWpurRnJIt_lvPp1fHN5nr8"
+      }
+    },
+    {
+      "id": "ASSERTION-WRONG-PAYLOAD-CONTEXT",
+      "expect": "reject-after-key",
+      "assertions": [
+        "rs-wrong-context"
+      ],
+      "assertion_keys": {
+        "publisher": "publisher"
+      }
+    },
+    {
+      "id": "ASSERTION-RS256-UNCONFIGURED-KEY",
+      "expect": "reject-after-key",
+      "assertions": [
+        "rs"
+      ]
+    },
+    {
+      "id": "ASSERTION-RS256-WRONG-KEY",
+      "expect": "reject-after-key",
+      "assertions": [
+        "rs"
+      ],
+      "assertion_keys": {
+        "publisher": "wrong"
+      }
+    },
+    {
+      "id": "ASSERTION-HS256-DOWNGRADE",
+      "expect": "reject-after-key",
+      "assertions": [
+        "substituted-algorithm"
+      ],
+      "assertion_keys": {
+        "publisher": "publisher"
+      }
+    },
+    {
+      "id": "ASSERTION-UNKNOWN-CRITICAL-HEADER",
+      "expect": "reject-after-key",
+      "assertions": [
+        "unsupported-protected-header"
+      ]
+    },
+    {
+      "id": "ASSERTION-EMPTY-SIGNATURE",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/binding/signature": ""
+      }
     }
-  ]
+  ],
+  "known_assertions": {
+    "hs": {
+      "id": "tdf-binding",
+      "type": "other",
+      "scope": "payload",
+      "statement": {
+        "format": "text/plain",
+        "value": "révision <雪>\nHandling \"notes\".",
+        "schema": "urn:opentdf:test:assertion"
+      },
+      "appliesToState": "unencrypted",
+      "binding": {
+        "method": "jws",
+        "signature": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NlcnRpb25IYXNoIjoiNWI4NjNiYjQ1NmIwYmE3YjQ0ZDI3YmEyNmY5ZTlhMjczNjcwMjY2NWExMjhiMTYwNzk0NWNmYTZhYmY0YzMxNyIsImFzc2VydGlvblNpZyI6InFPVlhkNEV2b3JRb214OFViOVI5bmJpYlAwWUtOVHBLSWFFMXA2c2ZnOGRiaGp1MFZyQzZlMFRTZTZKdm5wb25ObkFtWmFFb3NXQjVSYyttcS9UREZ3PT0ifQ.XUqNSz-uyvliA4yWvaR5KWpurRnJIt_lvPp1fHN5nr8"
+      }
+    },
+    "rs": {
+      "id": "publisher",
+      "type": "other",
+      "scope": "payload",
+      "statement": {
+        "format": "text/plain",
+        "value": "révision <雪>\nHandling \"notes\".",
+        "schema": "urn:opentdf:test:assertion"
+      },
+      "appliesToState": "unencrypted",
+      "binding": {
+        "method": "jws",
+        "signature": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NlcnRpb25IYXNoIjoiMTkzNTY4MDJiZWU1OWNkMWQyNDA2MmY4ZjI5ZGU4YjM4MWI1YWZjYzNlYWNlNGE2ZDA0ZGE4YjAwNDNmZjIzMiIsImFzc2VydGlvblNpZyI6InFPVlhkNEV2b3JRb214OFViOVI5bmJpYlAwWUtOVHBLSWFFMXA2c2ZnOGNaTldnQ3Z1V2MwZEpBWXZqeW5laXpnYld2ekQ2czVLYlFUYWl3QkQveU1nPT0ifQ.nUBheNNLy5JlUXPT_DYrA7CHCUuIA1CNpm_LkjPtG9DyNeMwZ5HZWx0xGhhY7rczY1rKhzDG8tVqhve98Kh37-71jYFkIwTPxjIbKM0sT5SzaIfuDqqX9_oZUizR6H0PBOkppUxVJgmzpns6en85vzQXzXWOdAEuwwfYXQRkEfs3GdCQV4ZDadDNrSYOu1Kq7uhkk0jj4p4Nv61IhqF5ijOzBvalVpDN8a_mOJzxaG2C8EbRazXtSXgUyKoE8WfEei6I39-UNukSJbd6EUVGMeNFKmcgiOw_pnuwPsCV2Jxtlp7mSwxpbC2tc0VrnDV-xiOqQJL5SCH7dx5iqWgH1Q"
+      }
+    },
+    "hs-minimal": {
+      "id": "tdf-binding",
+      "type": "other",
+      "scope": "payload",
+      "statement": {
+        "format": "text/plain",
+        "value": "révision <雪>\nHandling \"notes\"."
+      },
+      "binding": {
+        "method": "jws",
+        "signature": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NlcnRpb25IYXNoIjoiYmU2ZjMyZDE2ZjdjMDkwZTdkOGRjYWRkMzJjOWNhYmE4MjMzMWM0NDBmNzVlMzc4YjEzZTQ5NTlmMGY1MmRlNiIsImFzc2VydGlvblNpZyI6InFPVlhkNEV2b3JRb214OFViOVI5bmJpYlAwWUtOVHBLSWFFMXA2c2ZnOGUrYnpMUmIzd0pEbjJOeXQweXljcTZnak1jUkE5MTQzaXhQa2xaOFBVdDVnPT0ifQ.c4e3ThebAbrBYjWerIk9WRb14Dpt73O1k81dy_OjNjI"
+      }
+    },
+    "rs-wrong-context": {
+      "id": "publisher",
+      "type": "other",
+      "scope": "payload",
+      "statement": {
+        "format": "text/plain",
+        "value": "révision <雪>\nHandling \"notes\".",
+        "schema": "urn:opentdf:test:assertion"
+      },
+      "appliesToState": "unencrypted",
+      "binding": {
+        "method": "jws",
+        "signature": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NlcnRpb25IYXNoIjoiMTkzNTY4MDJiZWU1OWNkMWQyNDA2MmY4ZjI5ZGU4YjM4MWI1YWZjYzNlYWNlNGE2ZDA0ZGE4YjAwNDNmZjIzMiIsImFzc2VydGlvblNpZyI6Ing0TWZxNmMxb1NGS09qVUtSaitidUoxOTFHOFVINXNvdEtJdmdYZFg1YWdaTldnQ3Z1V2MwZEpBWXZqeW5laXpnYld2ekQ2czVLYlFUYWl3QkQveU1nPT0ifQ.Fo6vBG34fPm0gHDlHLmq656ziah6F2CU1khtI_Vj_IN2IuTdqHmZG-2bQcMkSGJBSoNMCOqr_fVvWkRivNyCjt_WhkrqTFgmZgjJResEIrRrsrRDLrRQ6HLWID6NazjEZgz-EgyNTSTPKPnmI93GEWNozRtTKTv5XWTcfPqs89ovKWHl2Rxdys5lLyG_mUGhDx4r1eBkyW1kSIFqpe8dc77gBFDv54OQhA6SsU0J9e7hRdhUQAxioxheFuihH2OlNJ1sV2p-lJS3KjVVEiC-E8imNNcwJSFt0gGcqMe14RvqGl_-9v7dqfwO_o3tWOeIqd4_xcIoY1XzzvQinKn20Q"
+      }
+    },
+    "substituted-algorithm": {
+      "id": "publisher",
+      "type": "other",
+      "scope": "payload",
+      "statement": {
+        "format": "text/plain",
+        "value": "révision <雪>\nHandling \"notes\".",
+        "schema": "urn:opentdf:test:assertion"
+      },
+      "appliesToState": "unencrypted",
+      "binding": {
+        "method": "jws",
+        "signature": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NlcnRpb25IYXNoIjoiMTkzNTY4MDJiZWU1OWNkMWQyNDA2MmY4ZjI5ZGU4YjM4MWI1YWZjYzNlYWNlNGE2ZDA0ZGE4YjAwNDNmZjIzMiIsImFzc2VydGlvblNpZyI6InFPVlhkNEV2b3JRb214OFViOVI5bmJpYlAwWUtOVHBLSWFFMXA2c2ZnOGNaTldnQ3Z1V2MwZEpBWXZqeW5laXpnYld2ekQ2czVLYlFUYWl3QkQveU1nPT0ifQ.8FN3odLqnVQFe6DRG-8X1JAh4qJ8HV0IItqLnLPbyAE"
+      }
+    },
+    "unsupported-protected-header": {
+      "id": "tdf-binding",
+      "type": "other",
+      "scope": "payload",
+      "statement": {
+        "format": "text/plain",
+        "value": "révision <雪>\nHandling \"notes\".",
+        "schema": "urn:opentdf:test:assertion"
+      },
+      "appliesToState": "unencrypted",
+      "binding": {
+        "method": "jws",
+        "signature": "eyJhbGciOiJIUzI1NiIsImNyaXQiOlsiZml4dHVyZSJdLCJmaXh0dXJlIjp0cnVlLCJ0eXAiOiJKV1QifQ.eyJhc3NlcnRpb25IYXNoIjoiNWI4NjNiYjQ1NmIwYmE3YjQ0ZDI3YmEyNmY5ZTlhMjczNjcwMjY2NWExMjhiMTYwNzk0NWNmYTZhYmY0YzMxNyIsImFzc2VydGlvblNpZyI6InFPVlhkNEV2b3JRb214OFViOVI5bmJpYlAwWUtOVHBLSWFFMXA2c2ZnOGRiaGp1MFZyQzZlMFRTZTZKdm5wb25ObkFtWmFFb3NXQjVSYyttcS9UREZ3PT0ifQ.n5NQpb22Ub3cMXdhLLDzfJJO2AcSPIqxB6Xit2wurtM"
+      }
+    }
+  },
+  "assertion_public_keys": {
+    "publisher": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApdIEjG2CuxFlnDuLPwui\n56zKtnVnulYAptJm88Iwgs0/SGA3GluZf/NF4LD4By2WB40UpLkbS1ckibI5j43b\n7WZTAeF1/V5Bm6HWwNK19SqaD+t3BaXUtru9bYC0DEPvGy/YVcgh/WTAJQaxT3/t\nfhfvUWMhNpaCSODcgvxG8PUPoZOBCfBvjaWN9He5V8HdEdMC6U4ec8MIVYxSyTl6\nPEZoPAhvmkysfGtUk15qENDNWVhMX2cPW5DXVktf9x8le4SfjPMtRPyCUvNBUuqc\nzwo2l1ouyc5cJ9ZOsjvizLqMAzx9qpFnBpisDvO8nmWXQZNrksYH8oXcRTeeZWfU\n4QIDAQAB\n-----END PUBLIC KEY-----\n",
+    "wrong": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmb1ESeKHWLljPZB52FD5\nid7BXb2fiaB9j4oV/cNrVzpUtT6PPNtBvoY95IXrdQ1rgcWK20LSRWjMYwGooSIF\nQgiR2SHbGb+GfeJEM3wzIygA2cfSgFDK6lgTzDVA5ExD/RBAyQm8htKOD203xAV8\nejBl1LwSbTh9dp5vFy2fqd5med72MDnFrLrs2ux0lisr0AU07N9vemR6+qjD3B+k\nMkbn6j8fmPGTsUI8kO4w4yvgOOIoMvWfsIWCTcLjGgOQoKP4KB4fy9VqlUrtqiJ5\nS5dtjSwl6PvFH++87LY90QmqGBSk+mSbg77ZzlxZk2xCouN1PD5Xfg4e5UgKWXXm\npQIDAQAB\n-----END PUBLIC KEY-----\n"
+  }
 }
