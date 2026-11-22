@@ -16,3 +16,9 @@ test:
 
 package:
 	$(PYTHON) -m build --no-isolation
+
+RUST_SDK ?= ../opentdf-rust-sdk
+
+.PHONY: test-e2e
+test-e2e:
+	RUST_SDK="$(RUST_SDK)" "$(PYTHON)" -m pytest -m e2e -s tests/interop/test_e2e.py

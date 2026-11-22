@@ -28,7 +28,8 @@ opentdf_sdk = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--import-mode=importlib", "--strict-config", "--strict-markers"]
+addopts = ["--import-mode=importlib", "--strict-config", "--strict-markers", "-m", "not e2e"]
+markers = ["e2e: starts the OpenTDF test stack and tests the packaged SDKs"]
 
 [tool.mypy]
 python_version = "3.10"

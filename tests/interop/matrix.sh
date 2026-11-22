@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+exec "${PYTHON:-python3}" -B "$(dirname -- "$0")/matrix.py" "$@"

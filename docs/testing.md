@@ -1,8 +1,8 @@
 # Testing
 
-Run `make check` for the local suite. It covers file round trips, ZIP and
-manifest validation, segment boundaries, and authenticated output. Run
-the [interoperability matrix](../tests/interop/README.md) for live KAS tests.
+Run `make check` for offline unit, integration, and conformance tests.
+Run `make test-e2e` for downstream package tests against a fresh local KAS.
+The [interoperability guide](../tests/interop/README.md) has the setup.
 
 | Reference | Pin |
 | --- | --- |

@@ -1,0 +1,401 @@
+{
+  "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "kas_url": "https://kas.example.invalid",
+  "plaintext": "AFRERi1jb25mb3JtYW5jZQpwYXlsb2Fk/wB/gA==",
+  "encrypted_payload": "AAAAAAAAAAAAAAABFYL7ummXX3BoQSNUjchZkqjlV3eBL6K0KJsfFG/UfZ0AAAAAAAAAAAAAAALDAU8E2CS7tUYNQ5G4mz9GCjU6SiGhNaerH4PH",
+  "manifests": {
+    "java": {
+      "payload": {
+        "type": "reference",
+        "url": "0.payload",
+        "protocol": "zip",
+        "isEncrypted": true,
+        "mimeType": "application/octet-stream"
+      },
+      "encryptionInformation": {
+        "type": "split",
+        "keyAccess": [
+          {
+            "type": "wrapped",
+            "url": "https://kas.example.invalid",
+            "protocol": "kas",
+            "kid": "fixture-key",
+            "schemaVersion": "1.0",
+            "wrappedKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+            "policyBinding": {
+              "alg": "HS256",
+              "hash": "NjgxNDM3NjBlZjJmNTQwODI0NDdiN2QyMzE5MDY0ZGMwNmQ4YTllN2UwMGJhZmMzODhjYzg0Yzk4MGJjMjgwNA=="
+            }
+          }
+        ],
+        "method": {
+          "algorithm": "AES-256-GCM",
+          "isStreamable": true
+        },
+        "integrityInformation": {
+          "rootSignature": {
+            "alg": "HS256",
+            "sig": "bFUtcjiRpnqzL7+NZKkba6aoFeqwxbvxKP42Kovbs+A="
+          },
+          "segmentHashAlg": "GMAC",
+          "segmentSizeDefault": 16,
+          "encryptedSegmentSizeDefault": 44,
+          "segments": [
+            {
+              "segmentSize": 16,
+              "encryptedSegmentSize": 44,
+              "hash": "qOVXd4EvorQomx8Ub9R9nQ=="
+            },
+            {
+              "segmentSize": 12,
+              "encryptedSegmentSize": 40,
+              "hash": "uJs/Rgo1OkohoTWnqx+Dxw=="
+            }
+          ]
+        },
+        "policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsIn1dLCJkaXNzZW0iOltdfX0="
+      },
+      "assertions": [],
+      "schemaVersion": "4.3.0"
+    },
+    "spec": {
+      "payload": {
+        "type": "reference",
+        "url": "0.payload",
+        "protocol": "zip",
+        "isEncrypted": true,
+        "mimeType": "application/octet-stream",
+        "tdf_spec_version": "4.3.0"
+      },
+      "encryptionInformation": {
+        "type": "split",
+        "keyAccess": [
+          {
+            "type": "wrapped",
+            "url": "https://kas.example.invalid",
+            "protocol": "kas",
+            "kid": "fixture-key",
+            "schemaVersion": "1.0",
+            "wrappedKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+            "policyBinding": {
+              "alg": "HS256",
+              "hash": "aBQ3YO8vVAgkR7fSMZBk3AbYqefgC6/DiMyEyYC8KAQ="
+            }
+          }
+        ],
+        "method": {
+          "algorithm": "AES-256-GCM",
+          "isStreamable": true
+        },
+        "integrityInformation": {
+          "rootSignature": {
+            "alg": "HS256",
+            "sig": "bFUtcjiRpnqzL7+NZKkba6aoFeqwxbvxKP42Kovbs+A="
+          },
+          "segmentHashAlg": "GMAC",
+          "segmentSizeDefault": 16,
+          "encryptedSegmentSizeDefault": 44,
+          "segments": [
+            {
+              "segmentSize": 16,
+              "encryptedSegmentSize": 44,
+              "hash": "qOVXd4EvorQomx8Ub9R9nQ=="
+            },
+            {
+              "segmentSize": 12,
+              "encryptedSegmentSize": 40,
+              "hash": "uJs/Rgo1OkohoTWnqx+Dxw=="
+            }
+          ]
+        },
+        "policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsIn1dLCJkaXNzZW0iOltdfX0="
+      },
+      "assertions": []
+    }
+  },
+  "cases": [
+    {
+      "id": "BASE-KNOWN-ANSWER",
+      "expect": "accept"
+    },
+    {
+      "id": "BASE-SEGMENT-SIZE-DEFAULTS",
+      "expect": "accept",
+      "remove": [
+        "/encryptionInformation/integrityInformation/segments/0/segmentSize",
+        "/encryptionInformation/integrityInformation/segments/0/encryptedSegmentSize"
+      ]
+    },
+    {
+      "id": "SPEC-REFERENCED-PAYLOAD",
+      "expect": "accept",
+      "profiles": [
+        "spec"
+      ],
+      "archive": "renamed",
+      "set": {
+        "/payload/url": "protected-content.bin"
+      }
+    },
+    {
+      "id": "ZIP-EXTRA-MEMBER",
+      "expect": "reject-structural",
+      "archive": "extra-member"
+    },
+    {
+      "id": "ZIP-AMBIGUOUS-MANIFEST",
+      "expect": "reject-structural",
+      "archive": "both-manifests"
+    },
+    {
+      "id": "ZIP-TRUNCATED-FOOTER",
+      "expect": "reject-structural",
+      "archive": "truncated-footer"
+    },
+    {
+      "id": "ZIP-LOCAL-NAME-MISMATCH",
+      "expect": "reject-structural",
+      "archive": "local-name-mismatch"
+    },
+    {
+      "id": "ZIP-COMMENT",
+      "expect": "reject-structural",
+      "archive": "comment"
+    },
+    {
+      "id": "ZIP-UNKNOWN-MANIFEST",
+      "expect": "reject-structural",
+      "archive": "unknown-manifest"
+    },
+    {
+      "id": "MANIFEST-INVALID-JSON",
+      "expect": "reject-structural",
+      "archive": "invalid-json"
+    },
+    {
+      "id": "MANIFEST-DUPLICATE-FIELD",
+      "expect": "reject-structural",
+      "archive": "duplicate-json"
+    },
+    {
+      "id": "JAVA-MISSING-VERSION",
+      "expect": "reject-structural",
+      "profiles": [
+        "java"
+      ],
+      "remove": [
+        "/schemaVersion"
+      ]
+    },
+    {
+      "id": "JAVA-MIXED-VERSION",
+      "expect": "reject-structural",
+      "profiles": [
+        "java"
+      ],
+      "set": {
+        "/payload/tdf_spec_version": "4.3.0"
+      }
+    },
+    {
+      "id": "SPEC-MISSING-VERSION",
+      "expect": "reject-structural",
+      "profiles": [
+        "spec"
+      ],
+      "remove": [
+        "/payload/tdf_spec_version"
+      ]
+    },
+    {
+      "id": "SPEC-MIXED-VERSION",
+      "expect": "reject-structural",
+      "profiles": [
+        "spec"
+      ],
+      "set": {
+        "/schemaVersion": null
+      }
+    },
+    {
+      "id": "SPEC-TRAVERSAL-REFERENCE",
+      "expect": "reject-structural",
+      "profiles": [
+        "spec"
+      ],
+      "set": {
+        "/payload/url": "../0.payload"
+      }
+    },
+    {
+      "id": "PAYLOAD-MISSING-REFERENCE",
+      "expect": "reject-structural",
+      "remove": [
+        "/payload/url"
+      ]
+    },
+    {
+      "id": "PAYLOAD-PLAINTEXT-FLAG",
+      "expect": "reject-structural",
+      "set": {
+        "/payload/isEncrypted": false
+      }
+    },
+    {
+      "id": "PAYLOAD-WRONG-LENGTH",
+      "expect": "reject-structural",
+      "archive": "short-payload"
+    },
+    {
+      "id": "METHOD-UNSUPPORTED-ALGORITHM",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/method/algorithm": "AES-128-GCM"
+      }
+    },
+    {
+      "id": "METHOD-INVALID-STREAMABLE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/method/isStreamable": false
+      }
+    },
+    {
+      "id": "GRANT-ABSENT",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess": []
+      }
+    },
+    {
+      "id": "GRANT-UNSUPPORTED-SPLIT",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/sid": "split-1"
+      }
+    },
+    {
+      "id": "GRANT-UNTRUSTED-ORIGIN",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/url": "https://foreign.example.invalid"
+      }
+    },
+    {
+      "id": "GRANT-MALFORMED-KEY",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/wrappedKey": "AA=="
+      }
+    },
+    {
+      "id": "GRANT-BINDING-ALGORITHM",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/policyBinding/alg": "HS512"
+      }
+    },
+    {
+      "id": "GRANT-BINDING-INVALID-BASE64",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/policyBinding/hash": "!!!"
+      }
+    },
+    {
+      "id": "GRANT-BINDING-WRONG-WIDTH",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/policyBinding/hash": "AAAAAAAAAAAAAAAAAAAAAA=="
+      }
+    },
+    {
+      "id": "POLICY-MALFORMED",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "e2ludmFsaWQ="
+      }
+    },
+    {
+      "id": "POLICY-NO-ATTRIBUTE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjogIjMyNDhjYjRkLTUyMjMtNDI0Mi04MjZhLTNiNjJmMWNlYWExMCIsICJib2R5IjogeyJkYXRhQXR0cmlidXRlcyI6IFtdLCAiZGlzc2VtIjogW119fQ=="
+      }
+    },
+    {
+      "id": "INTEGRITY-ABSENT-SEGMENTS",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segments": []
+      }
+    },
+    {
+      "id": "INTEGRITY-INVALID-DEFAULT-SIZE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segmentSizeDefault": 0
+      }
+    },
+    {
+      "id": "INTEGRITY-UNSUPPORTED-SEGMENT-ALGORITHM",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segmentHashAlg": "HS256"
+      }
+    },
+    {
+      "id": "INTEGRITY-UNSUPPORTED-ROOT-ALGORITHM",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/rootSignature/alg": "GMAC"
+      }
+    },
+    {
+      "id": "INTEGRITY-MISMATCHED-SEGMENT-SIZE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segments/1/encryptedSegmentSize": 28
+      }
+    },
+    {
+      "id": "INTEGRITY-BAD-TAG-LENGTH",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segments/0/hash": "AA=="
+      }
+    },
+    {
+      "id": "INTEGRITY-ROOT-TAMPER",
+      "expect": "reject-after-key",
+      "set": {
+        "/encryptionInformation/integrityInformation/rootSignature/sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+    },
+    {
+      "id": "INTEGRITY-LAST-CIPHERTEXT-TAMPER",
+      "expect": "reject-after-key",
+      "archive": "last-ciphertext-tamper"
+    },
+    {
+      "id": "JAVA-BINDING-TAMPER",
+      "expect": "reject-after-key",
+      "profiles": [
+        "java"
+      ],
+      "set": {
+        "/encryptionInformation/keyAccess/0/policyBinding/hash": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMA=="
+      }
+    },
+    {
+      "id": "SPEC-BINDING-TAMPER",
+      "expect": "reject-after-key",
+      "profiles": [
+        "spec"
+      ],
+      "set": {
+        "/encryptionInformation/keyAccess/0/policyBinding/hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+    }
+  ]
+}
