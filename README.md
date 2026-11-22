@@ -35,10 +35,15 @@ create_tdf(
 open_tdf("archive.tdf", "recovered.bin", **kas)
 ```
 
-This profile uses the Java 0.19.1 ZIP layout with `0.payload` and
-`0.manifest.json`, one RSA-2048 KAS key, and one policy attribute. Payloads
-are limited to 64 MiB. KAS denial raises `AccessDenied` and leaves the
-destination absent.
+By default, `create_tdf` writes the Java 0.19.1 ZIP layout with `0.payload`
+and `0.manifest.json`. Pass `profile="spec"` to write the OpenTDF 4.3.0
+profile with `manifest.json`, the version in the payload reference, and the
+base64-encoded raw policy HMAC. `open_tdf` detects either profile from the
+archive and checks that the manifest fields match.
+
+Both profiles support one RSA-2048 KAS key, one policy attribute, and payloads
+up to 64 MiB. KAS denial raises `AccessDenied` and leaves the destination
+absent. These profiles cover a subset of the TDF specification.
 
 ## Work on the SDK
 

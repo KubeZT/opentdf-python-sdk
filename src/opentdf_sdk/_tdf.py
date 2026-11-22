@@ -1,13 +1,14 @@
 import hmac
 import json
 import os
+import re
 import stat
 import struct
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import IO, Any
+from typing import IO, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
@@ -17,10 +18,14 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ._kas import Kas, TdfError, decode, encode, utf8_json
 
-MANIFEST = "0.manifest.json"
+JAVA_MANIFEST = "0.manifest.json"
+SPEC_MANIFEST = "manifest.json"
+SCHEMA_VERSION = "4.3.0"
 PAYLOAD = "0.payload"
 SEGMENT_SIZE = 2 * 1024 * 1024
 OVERHEAD = 28
+# Data descriptor and UTF-8 ZIP member names.
+ZIP_MEMBER_FLAGS = 0x0808
 MAX_PLAINTEXT = 64 * 1024 * 1024
 MAX_MANIFEST = 4 * 1024 * 1024
 MAX_SEGMENTS = 1024
@@ -46,6 +51,11 @@ def _output(destination: str | Path) -> Iterator[IO[bytes]]:
 
 def _mac(key: bytes, message: bytes) -> bytes:
     return hmac.digest(key, message, "sha256")
+
+
+def _policy_hash(key: bytes, policy: str, *, spec: bool) -> bytes:
+    digest = _mac(key, policy.encode("ascii"))
+    return digest if spec else digest.hex().encode("ascii")
 
 
 def _attribute(value: str) -> None:
@@ -80,8 +90,16 @@ def create_tdf(
     access_token: str,
     attribute: str,
     key_id: str | None = None,
+    profile: Literal["java", "spec"] = "java",
 ) -> None:
-    """Encrypt a file as a Java SDK 0.19.1-compatible TDF."""
+    """Encrypt a file using the selected TDF ZIP profile.
+
+    The default matches Java SDK 0.19.1. The spec profile uses the manifest
+    filename, version field, and policy HMAC encoding from OpenTDF 4.3.0.
+    """
+    if profile not in ("java", "spec"):
+        raise TdfError("Unknown TDF ZIP profile")
+    spec = profile == "spec"
     _attribute(attribute)
     kas = Kas(kas_url, access_token)
     with Path(source).open("rb") as plaintext, _output(destination) as output:
@@ -98,6 +116,8 @@ def create_tdf(
             with archive.open(PAYLOAD, "w") as payload:
                 while True:
                     segment = plaintext.read(SEGMENT_SIZE)
+                    if spec and not segment and segments:
+                        break
                     total += len(segment)
                     if total > MAX_PLAINTEXT:
                         raise TdfError("Source exceeded 64 MiB")
@@ -128,18 +148,24 @@ def create_tdf(
                     }
                 )
             )
+            payload_info: dict[str, str | bool] = {
+                "type": "reference",
+                "url": PAYLOAD,
+                "protocol": "zip",
+                "mimeType": "application/octet-stream",
+                "isEncrypted": True,
+            }
+            manifest: dict[str, object] = {}
+            if spec:
+                payload_info["tdf_spec_version"] = SCHEMA_VERSION
+            else:
+                manifest["schemaVersion"] = SCHEMA_VERSION
             archive.writestr(
-                MANIFEST,
+                SPEC_MANIFEST if spec else JAVA_MANIFEST,
                 utf8_json(
                     {
-                        "schemaVersion": "4.3.0",
-                        "payload": {
-                            "type": "reference",
-                            "url": PAYLOAD,
-                            "protocol": "zip",
-                            "mimeType": "application/octet-stream",
-                            "isEncrypted": True,
-                        },
+                        **manifest,
+                        "payload": payload_info,
                         "assertions": [],
                         "encryptionInformation": {
                             "type": "split",
@@ -157,7 +183,7 @@ def create_tdf(
                                     "policyBinding": {
                                         "alg": "HS256",
                                         "hash": encode(
-                                            _mac(key, policy.encode()).hex().encode()
+                                            _policy_hash(key, policy, spec=spec)
                                         ),
                                     },
                                 }
@@ -197,8 +223,18 @@ def _unique_object(entries: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
+def _reject_constant(value: str) -> None:
+    raise TdfError("Invalid JSON number")
+
+
 def _parse(data: bytes) -> dict[str, Any]:
-    return _object(json.loads(data, object_pairs_hook=_unique_object))
+    return _object(
+        json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    )
 
 
 def _check_directory(file: IO[bytes], length: int) -> None:
@@ -233,32 +269,51 @@ def _check_directory(file: IO[bytes], length: int) -> None:
 
 def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
     entries = archive.infolist()
-    if sorted(info.filename for info in entries) != sorted((PAYLOAD, MANIFEST)):
-        raise TdfError("Expected one payload and one Java-compatible manifest")
+    names = {info.filename for info in entries}
+    spec = SPEC_MANIFEST in names
+    if len(entries) != 2 or len(names) != 2 or spec == (JAVA_MANIFEST in names):
+        raise TdfError("Expected one payload and exactly one supported manifest")
     if any(
         info.compress_type != ZIP_STORED
         or info.compress_size != info.file_size
         or info.orig_filename != info.filename
-        or info.flag_bits & 1
+        or info.flag_bits & ~ZIP_MEMBER_FLAGS
         for info in entries
     ):
         raise TdfError("Expected uncompressed ZIP members")
     if not any(info.header_offset == 0 for info in entries):
         raise TdfError("Expected ZIP header at the start of the archive")
-    manifest_entry = archive.getinfo(MANIFEST)
+    manifest_name = SPEC_MANIFEST if spec else JAVA_MANIFEST
+    manifest_entry = archive.getinfo(manifest_name)
     if manifest_entry.file_size > MAX_MANIFEST:
         raise TdfError("Manifest exceeded 4 MiB")
     manifest = _parse(archive.read(manifest_entry))
     payload = _object(manifest.get("payload"))
+    if spec:
+        version_matches = (
+            payload.get("tdf_spec_version") == SCHEMA_VERSION
+            and "schemaVersion" not in manifest
+        )
+    else:
+        version_matches = (
+            manifest.get("schemaVersion") == SCHEMA_VERSION
+            and "tdf_spec_version" not in payload
+        )
+    payload_name = payload.get("url")
     if (
-        manifest.get("schemaVersion") != "4.3.0"
+        not version_matches
+        or "tdf_spec_version" in manifest
         or manifest.get("assertions", []) != []
         or payload.get("type") != "reference"
         or payload.get("protocol") != "zip"
-        or payload.get("url") != PAYLOAD
         or payload.get("isEncrypted") is not True
+        or not isinstance(payload_name, str)
+        or payload_name == manifest_name
+        or payload_name not in names
+        or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,254}", payload_name)
+        or (not spec and payload_name != PAYLOAD)
     ):
-        raise TdfError("Unsupported TDF manifest")
+        raise TdfError("Unsupported TDF manifest or payload reference")
     info = _object(manifest.get("encryptionInformation"))
     method = _object(info.get("method"))
     keys = info.get("keyAccess")
@@ -266,6 +321,7 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
         info.get("type") != "split"
         or method.get("algorithm") != "AES-256-GCM"
         or method.get("isStreamable") is not True
+        or method.get("iv", "") != ""
         or not isinstance(keys, list)
         or len(keys) != 1
     ):
@@ -285,7 +341,9 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
     ):
         raise TdfError("Unsupported key access entry or untrusted KAS")
     decode(key_access.get("wrappedKey"), 256)
-    binding_hash = decode(binding.get("hash"), 64)
+    binding_hash = decode(binding.get("hash"), 32 if spec else 64)
+    if not spec and not re.fullmatch(rb"[0-9a-f]{64}", binding_hash):
+        raise TdfError("Invalid policy binding encoding")
 
     policy = info.get("policy")
     policy_json = _parse(decode(policy))
@@ -299,8 +357,10 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
     ):
         raise TdfError("Expected one policy attribute")
     attribute = _object(attributes[0])
-    if attribute.get("isDefault", False) is not False:
-        raise TdfError("Default policy attributes are unsupported")
+    if attribute.get("isDefault", False) is not False or any(
+        attribute.get(field, "") != "" for field in ("displayName", "pubKey", "kasURL")
+    ):
+        raise TdfError("Unsupported policy attribute metadata")
     _attribute(attribute["attribute"])
     assert isinstance(policy, str)
 
@@ -340,19 +400,19 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
     if (
         sum(size for size, _, _ in validated_segments) > MAX_PLAINTEXT
         or sum(size for _, size, _ in validated_segments)
-        != archive.getinfo(PAYLOAD).file_size
+        != archive.getinfo(payload_name).file_size
     ):
         raise TdfError("Invalid payload size")
 
-    key = kas.unwrap(policy, key_access)
-    if not hmac.compare_digest(_mac(key, policy.encode()).hex().encode(), binding_hash):
-        raise TdfError("Policy binding failed")
-    if not hmac.compare_digest(
-        _mac(key, b"".join(tag for _, _, tag in validated_segments)), root_hash
-    ):
-        raise TdfError("Root integrity check failed")
-    cipher = AESGCM(key)
-    with archive.open(PAYLOAD) as encrypted:
+    with archive.open(payload_name) as encrypted:
+        key = kas.unwrap(policy, key_access)
+        if not hmac.compare_digest(_policy_hash(key, policy, spec=spec), binding_hash):
+            raise TdfError("Policy binding failed")
+        if not hmac.compare_digest(
+            _mac(key, b"".join(tag for _, _, tag in validated_segments)), root_hash
+        ):
+            raise TdfError("Root integrity check failed")
+        cipher = AESGCM(key)
         for _, size, tag in validated_segments:
             chunk = encrypted.read(size)
             if len(chunk) != size or not hmac.compare_digest(chunk[-16:], tag):
@@ -367,7 +427,7 @@ def open_tdf(
     kas_url: str,
     access_token: str,
 ) -> None:
-    """Open a Java SDK 0.19.1-compatible TDF after KAS authorization."""
+    """Open a supported TDF ZIP profile after KAS authorization."""
     kas = Kas(kas_url, access_token)
     try:
         with Path(source).open("rb") as content, _output(destination) as output:

@@ -1,38 +1,41 @@
 # Testing
 
-Run `make check` for local tests. The suite covers file round trips,
-segment boundaries, malformed containers, integrity failures, and size
-limits without a running platform. Use the
-[interoperability tests](../tests/interop/README.md) for the live KAS matrix.
-
-## Compatibility profile
+Run `make check` for the local suite. It covers file round trips, ZIP and
+manifest validation, segment boundaries, and authenticated output. Run
+the [interoperability matrix](../tests/interop/README.md) for live KAS tests.
 
 | Reference | Pin |
 | --- | --- |
-| [TDF specification](https://github.com/opentdf/spec/releases/tag/4.3.0) | `4.3.0` (`c6592ba`) |
+| [TDF specification tag](https://github.com/opentdf/spec/releases/tag/4.3.0) | `4.3.0` (`c6592ba`) |
 | [Java SDK](https://github.com/opentdf/java-sdk/releases/tag/v0.19.1) | `0.19.1` (`8e6f8bc`) |
+| [Go SDK](https://github.com/opentdf/platform/releases/tag/sdk%2Fv0.35.0) | `v0.35.0` (`b048476`) |
 | [OpenTDF Platform](https://github.com/opentdf/platform/releases/tag/service/v0.31.0) | `service/v0.31.0` (`45a10ad`) |
 
-The Java 0.19.1 ZIP profile stores `0.payload` and `0.manifest.json`.
-The manifest declares schema version `4.3.0`, while the
-[published container specification](https://opentdf.io/spec/schema/opentdf)
-names the entry `manifest.json`. The SDKs implement the tested Java profile.
+## ZIP profiles
 
-| Area | What to verify |
+| Writer profile | ZIP manifest | Version field | HS256 policy-binding digest before Base64 |
+| --- | --- | --- | --- |
+| Java-compatible (default) | `0.manifest.json` | Root `schemaVersion` | Lowercase hexadecimal |
+| Spec ZIP (explicit) | `manifest.json` | `payload.tdf_spec_version` | Raw digest bytes |
+
+The profiles cover a single RSA KAS grant, a single policy attribute, and
+payloads up to 64 MiB. Both write `0.payload`. Spec ZIP readers also resolve
+safe, flat payload member names from the manifest. Go 0.35.0 writes the
+Java-compatible layout and can read both layouts with `0.payload`. Java
+0.19.1 expects the Java-compatible layout.
+
+The spec tag's own VERSION file reads `4.2.0`. The spec ZIP profile uses
+the manifest placement and binding encoding described by the pinned tag
+with version value `4.3.0`, as used by the pinned SDKs. The profile is a
+tested subset of base TDF.
+
+| Area | Shared check |
 | --- | --- |
-| ZIP and manifest | Stored entries with unique names, a payload reference, supported schema and algorithms, and bounded sizes. |
-| Segments and integrity | Empty and multi-segment payloads, authentication of every segment, root integrity, and no destination file on failure. |
-| Key access and policy | One RSA-wrapped key, one data attribute, policy binding, an entitled read, and a policy-denied read with valid credentials. |
-| Interoperability | Every Rust, Python, and Java writer and reader combination recovers identical bytes through the pinned KAS. |
+| Container | Exactly two stored members, matching profile and version field, one grant, and a valid payload reference. |
+| Integrity | Equal bytes across segment boundaries. Reject ciphertext tampering and leave the destination absent. |
+| Key access | Allow two entitled identities on the same KAS. Reject invalid credentials, unentitled identities, and unreachable KAS. |
 
-Federation and disconnected access need a separate two-KAS test.
-KubeZT owns the `.kube` extension and passes its package to the SDK as
-payload bytes.
-
-## Fixtures
-
-Keep shared inputs and expected outcomes byte-identical. Record the source,
-revision, license, and checksum of anything brought in from the
-[upstream suite](https://github.com/opentdf/tests). Link each conformance case
-to the specific requirement it exercises. Keep live KAS credentials and
-generated keys out of fixtures.
+Record the revision, license, and checksum of any fixture brought in from
+the [upstream suite](https://github.com/opentdf/tests). Keep credentials and
+generated private keys out of fixtures. KubeZT supplies its own package as
+payload bytes and owns the `.kube` extension.
