@@ -12,8 +12,33 @@ environment:
 python -m pip install -e /path/to/opentdf-python-sdk
 ```
 
-The SDK has no runtime dependencies. You can also run the
-[example script](examples/embedding.py) to check the install.
+## Create and open a TDF
+
+Supply an access token from the platform's identity provider and the URL of
+the KAS you trust. The destination path must be new.
+
+```python
+import os
+
+from opentdf_sdk import create_tdf, open_tdf
+
+kas = {
+    "kas_url": "http://localhost:18880",
+    "access_token": os.environ["OTDF_ACCESS_TOKEN"],
+}
+create_tdf(
+    "input.bin",
+    "archive.tdf",
+    attribute="https://example.com/attr/department/value/engineering",
+    **kas,
+)
+open_tdf("archive.tdf", "recovered.bin", **kas)
+```
+
+This profile uses the Java 0.19.1 ZIP layout with `0.payload` and
+`0.manifest.json`, one RSA-2048 KAS key, and one policy attribute. Payloads
+are limited to 64 MiB. KAS denial raises `AccessDenied` and leaves the
+destination absent.
 
 ## Work on the SDK
 

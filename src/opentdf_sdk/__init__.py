@@ -1,8 +1,11 @@
-"""Public API for the independent Python TDF SDK scaffold."""
+"""Python SDK for the Trusted Data Format."""
 
 from importlib import metadata as _metadata
 
-__all__ = ["version"]
+from ._kas import AccessDenied, TdfError
+from ._tdf import create_tdf, open_tdf
+
+__all__ = ["AccessDenied", "TdfError", "create_tdf", "open_tdf", "version"]
 
 
 def version() -> str:

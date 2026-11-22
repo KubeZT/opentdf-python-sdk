@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "opentdf-python-sdk"
 version = "0.1.0"
-description = "Initial scaffold for an independent Python SDK for the Trusted Data Format"
+description = "Python SDK for the Trusted Data Format"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = ["cryptography>=45,<50"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
