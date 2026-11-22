@@ -2,7 +2,8 @@
 
 Run `make check` for offline unit, integration, and conformance tests.
 Run `make test-e2e` for downstream package tests against a fresh local KAS.
-The [interoperability guide](../tests/interop/README.md) has the setup.
+The [interoperability guide](../tests/interop/README.md) has the setup. The
+[capability matrix](capabilities.md) lists the verified reader and writer pairs.
 
 | Reference | Pin |
 | --- | --- |
@@ -18,8 +19,8 @@ The [interoperability guide](../tests/interop/README.md) has the setup.
 | Java-compatible (default) | `0.manifest.json` | Root `schemaVersion` | Lowercase hexadecimal |
 | Spec ZIP (explicit) | `manifest.json` | `payload.tdf_spec_version` | Raw digest bytes |
 
-The profiles cover a single RSA KAS grant, a single policy attribute, and
-regular files. Writers start at 2 MiB per segment and adapt the segment
+The profiles cover a single RSA KAS grant, one or more policy attributes,
+optional encrypted UTF-8 metadata, and regular files. Writers start at 2 MiB per segment and adapt the segment
 size to the payload. The 64 MiB segment limit and the manifest segment
 budget give an effective capacity of 2 TiB. Both write `0.payload`. Spec ZIP readers
 also resolve safe, flat payload member names from the manifest. Go 0.35.0 writes the

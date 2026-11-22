@@ -1,17 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"unicode/utf8"
 
 	"github.com/opentdf/platform/sdk"
 )
 
 func run(args []string) error {
-	if len(args) != 3 || (args[0] != "create" && args[0] != "open") {
-		return fmt.Errorf("usage: go-driver create|open INPUT OUTPUT")
+	if !validArgs(args) {
+		return fmt.Errorf(`usage:
+  go-driver create|open INPUT OUTPUT
+  go-driver create-features INPUT OUTPUT METADATA_FILE ATTRIBUTE [ATTRIBUTE ...]
+  go-driver open-features INPUT OUTPUT EXPECTED_METADATA_FILE`)
 	}
 
 	platform, err := endpoint("OTDF_PLATFORM_URL")
@@ -51,25 +56,10 @@ func run(args []string) error {
 	}
 	defer os.Remove(output.Name())
 	defer output.Close()
-	if args[0] == "create" {
-		attribute := os.Getenv("OTDF_ATTRIBUTE")
-		if attribute == "" {
-			return fmt.Errorf("set OTDF_ATTRIBUTE")
-		}
-		_, err = client.CreateTDF(output, input,
-			sdk.WithAutoconfigure(false),
-			sdk.WithKasInformation(sdk.KASInfo{
-				URL: kas.String(), KID: os.Getenv("OTDF_KAS_KEY_ID"), Algorithm: "rsa:2048",
-			}),
-			sdk.WithDataAttributes(attribute),
-			sdk.WithTargetMode("4.3.0"),
-		)
+	if args[0] == "create" || args[0] == "create-features" {
+		err = create(client, input, output, kas.String(), args)
 	} else {
-		var tdf *sdk.Reader
-		tdf, err = client.LoadTDF(input, sdk.WithKasAllowlist([]string{kas.String()}))
-		if err == nil {
-			_, err = tdf.WriteTo(output)
-		}
+		err = open(client, input, output, kas.String(), args)
 	}
 	if err != nil {
 		return err
@@ -78,6 +68,77 @@ func run(args []string) error {
 		return err
 	}
 	return os.Link(output.Name(), args[2])
+}
+
+func validArgs(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "create", "open":
+		return len(args) == 3
+	case "create-features":
+		return len(args) >= 5
+	case "open-features":
+		return len(args) == 4
+	default:
+		return false
+	}
+}
+
+func create(client *sdk.SDK, input, output *os.File, kas string, args []string) error {
+	var attributes []string
+	var metadata []byte
+	if args[0] == "create-features" {
+		attributes = args[4:]
+		var err error
+		metadata, err = os.ReadFile(args[3])
+		if err != nil {
+			return err
+		}
+		if !utf8.Valid(metadata) {
+			return fmt.Errorf("metadata must be UTF-8")
+		}
+	} else {
+		attribute := os.Getenv("OTDF_ATTRIBUTE")
+		if attribute == "" {
+			return fmt.Errorf("set OTDF_ATTRIBUTE")
+		}
+		attributes = []string{attribute}
+	}
+
+	_, err := client.CreateTDF(output, input,
+		sdk.WithAutoconfigure(false),
+		sdk.WithKasInformation(sdk.KASInfo{
+			URL: kas, KID: os.Getenv("OTDF_KAS_KEY_ID"), Algorithm: "rsa:2048",
+		}),
+		sdk.WithDataAttributes(attributes...),
+		sdk.WithMetaData(string(metadata)),
+		sdk.WithTargetMode("4.3.0"),
+	)
+	return err
+}
+
+func open(client *sdk.SDK, input, output *os.File, kas string, args []string) error {
+	tdf, err := client.LoadTDF(input, sdk.WithKasAllowlist([]string{kas}))
+	if err != nil {
+		return err
+	}
+	if args[0] == "open-features" {
+		expected, err := os.ReadFile(args[3])
+		if err != nil {
+			return err
+		}
+		metadata, err := tdf.UnencryptedMetadata()
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(metadata, expected) {
+			return fmt.Errorf("decrypted metadata differs")
+		}
+	}
+	_, err = tdf.WriteTo(output)
+	return err
 }
 
 func endpoint(name string) (*url.URL, error) {

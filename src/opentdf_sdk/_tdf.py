@@ -4,7 +4,7 @@ import os
 import re
 import stat
 import struct
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from io import BufferedReader
 from pathlib import Path
@@ -16,6 +16,7 @@ from zipfile import ZIP64_LIMIT, ZIP_STORED, BadZipFile, ZipExtFile, ZipFile
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ._kas import Kas, TdfError, decode, encode, utf8_json
 
@@ -83,9 +84,9 @@ def _policy_hash(key: bytes, policy: str, *, spec: bool) -> bytes:
     return digest if spec else digest.hex().encode("ascii")
 
 
-def _attribute(value: str) -> None:
+def _attribute(value: object) -> str:
     if not isinstance(value, str) or not value.isascii() or len(value) > 2048:
-        raise TdfError("Expected one data attribute value FQN")
+        raise TdfError("Expected a data attribute value FQN")
     try:
         uri = urlsplit(value)
     except ValueError as exc:
@@ -104,7 +105,49 @@ def _attribute(value: str) -> None:
         or not pieces[2]
         or not pieces[4]
     ):
-        raise TdfError("Expected one data attribute value FQN")
+        raise TdfError("Expected a data attribute value FQN")
+    return value
+
+
+def _distinct_attributes(values: Iterable[object]) -> list[str]:
+    attributes: list[str] = []
+    seen: set[str] = set()
+    size = 0
+    for value in values:
+        fqn = _attribute(value)
+        if fqn in seen:
+            raise TdfError("Duplicate policy attribute")
+        size += len(fqn) + len('{"attribute":"","isDefault":false}')
+        if size > MAX_MANIFEST:
+            raise TdfError("Manifest exceeded 4 MiB")
+        seen.add(fqn)
+        attributes.append(fqn)
+    if not attributes:
+        raise TdfError("Expected at least one policy attribute")
+    return attributes
+
+
+def _encrypt_metadata(key: bytes, metadata: str | None) -> str:
+    if metadata is None:
+        return ""
+    if not isinstance(metadata, str):
+        raise TdfError("Expected metadata as UTF-8 text")
+    if not metadata:
+        return ""
+    if len(metadata) > MAX_MANIFEST:
+        raise TdfError("Manifest exceeded 4 MiB")
+    try:
+        plaintext = metadata.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TdfError("Expected metadata as UTF-8 text") from exc
+    if len(plaintext) > MAX_MANIFEST:
+        raise TdfError("Manifest exceeded 4 MiB")
+    nonce = bytearray(os.urandom(NONCE_SIZE))
+    # Segment counters never set the top bit of the nonce.
+    nonce[0] |= 0x80
+    iv = bytes(nonce)
+    ciphertext = AESGCM(key).encrypt(iv, plaintext, None)
+    return encode(utf8_json({"ciphertext": encode(iv + ciphertext), "iv": encode(iv)}))
 
 
 def _writer_segment_plan(length: int, *, spec: bool) -> tuple[int, int]:
@@ -121,7 +164,9 @@ def create_tdf(
     *,
     kas_url: str,
     access_token: str,
-    attribute: str,
+    attribute: str | None = None,
+    attributes: Sequence[str] | None = None,
+    metadata: str | None = None,
     key_id: str | None = None,
     profile: Literal["java", "spec"] = "java",
     manifest_kas_url: str | None = None,
@@ -130,13 +175,37 @@ def create_tdf(
 
     The default matches Java SDK 0.19.1. The spec profile uses the manifest
     filename, version field, and policy HMAC encoding from OpenTDF 4.3.0.
+    Pass one attribute or a sequence of distinct attributes. Nonempty metadata
+    is encrypted with the same key as the payload.
     Supply manifest_kas_url to record a different KAS origin in the archive.
     Supports plaintext files up to 2 TiB. HTTP requests use kas_url.
     """
     if profile not in ("java", "spec"):
         raise TdfError("Unknown TDF ZIP profile")
     spec = profile == "spec"
-    _attribute(attribute)
+    if attribute is not None and attributes is None:
+        selected = _distinct_attributes((attribute,))
+    elif (
+        attribute is None
+        and isinstance(attributes, Sequence)
+        and not isinstance(attributes, (str, bytes, bytearray))
+    ):
+        selected = _distinct_attributes(attributes)
+    else:
+        raise TdfError("Pass attribute or a sequence of attributes")
+    policy = encode(
+        utf8_json(
+            {
+                "uuid": str(uuid4()),
+                "body": {
+                    "dataAttributes": [
+                        {"attribute": value, "isDefault": False} for value in selected
+                    ],
+                    "dissem": [],
+                },
+            }
+        )
+    )
     kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
     with (
         _input(source, MAX_PLAINTEXT, "Source exceeded 2 TiB") as (plaintext, length),
@@ -145,6 +214,9 @@ def create_tdf(
         segment_size, segment_count = _writer_segment_plan(length, spec=spec)
         payload_length = length + segment_count * OVERHEAD
         key = os.urandom(32)
+        encrypted_metadata = _encrypt_metadata(key, metadata)
+        if len(policy) + len(encrypted_metadata) > MAX_MANIFEST:
+            raise TdfError("Manifest exceeded 4 MiB")
         kid, wrapped = kas.wrap(key, key_id)
         segments: list[dict[str, str | int]] = []
         tags = bytearray()
@@ -182,19 +254,6 @@ def create_tdf(
                     )
                 if plaintext.read(1):
                     raise TdfError("Source size changed while reading")
-            policy = encode(
-                utf8_json(
-                    {
-                        "uuid": str(uuid4()),
-                        "body": {
-                            "dataAttributes": [
-                                {"attribute": attribute, "isDefault": False}
-                            ],
-                            "dissem": [],
-                        },
-                    }
-                )
-            )
             payload_info: dict[str, str | bool] = {
                 "type": "reference",
                 "url": PAYLOAD,
@@ -222,7 +281,7 @@ def create_tdf(
                                 "protocol": "kas",
                                 "kid": kid,
                                 "sid": "",
-                                "encryptedMetadata": "",
+                                "encryptedMetadata": encrypted_metadata,
                                 "schemaVersion": "1.0",
                                 "wrappedKey": wrapped,
                                 "policyBinding": {
@@ -284,6 +343,19 @@ def _parse(data: bytes) -> dict[str, Any]:
     )
 
 
+def _metadata_ciphertext(value: object) -> bytes | None:
+    if value == "":
+        return None
+    envelope = _parse(decode(value))
+    if envelope.keys() != {"ciphertext", "iv"}:
+        raise TdfError("Invalid encrypted metadata envelope")
+    ciphertext = decode(envelope["ciphertext"])
+    iv = decode(envelope["iv"], NONCE_SIZE)
+    if len(ciphertext) < OVERHEAD or ciphertext[:NONCE_SIZE] != iv:
+        raise TdfError("Invalid encrypted metadata framing")
+    return ciphertext
+
+
 def _check_directory(file: IO[bytes], length: int) -> None:
     # Bound the ZIP directory before zipfile constructs an object per entry.
     if length < 22:
@@ -326,7 +398,7 @@ def _check_directory(file: IO[bytes], length: int) -> None:
         raise TdfError("Invalid ZIP directory")
 
 
-def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
+def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> str | None:
     entries = archive.infolist()
     names = {info.filename for info in entries}
     spec = SPEC_MANIFEST in names
@@ -394,12 +466,12 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
         or key_access.get("protocol") != "kas"
         or key_access.get("schemaVersion") != "1.0"
         or key_access.get("sid", "") != ""
-        or key_access.get("encryptedMetadata", "") != ""
         or not isinstance(key_access.get("kid"), str)
         or not key_access["kid"]
         or binding.get("alg") != "HS256"
     ):
         raise TdfError("Unsupported key access entry")
+    metadata_ciphertext = _metadata_ciphertext(key_access.get("encryptedMetadata", ""))
     decode(key_access.get("wrappedKey"), 256)
     binding_hash = decode(binding.get("hash"), 32 if spec else 64)
     if not spec and not re.fullmatch(rb"[0-9a-f]{64}", binding_hash):
@@ -410,18 +482,18 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
     UUID(policy_json["uuid"])
     body = _object(policy_json.get("body"))
     attributes = body.get("dataAttributes")
-    if (
-        not isinstance(attributes, list)
-        or len(attributes) != 1
-        or body.get("dissem") != []
-    ):
-        raise TdfError("Expected one policy attribute")
-    attribute = _object(attributes[0])
-    if attribute.get("isDefault", False) is not False or any(
-        attribute.get(field, "") != "" for field in ("displayName", "pubKey", "kasURL")
-    ):
-        raise TdfError("Unsupported policy attribute metadata")
-    _attribute(attribute["attribute"])
+    if not isinstance(attributes, list) or body.get("dissem") != []:
+        raise TdfError("Invalid policy body")
+    attribute_values: list[object] = []
+    for entry in attributes:
+        attribute = _object(entry)
+        if attribute.get("isDefault", False) is not False or any(
+            attribute.get(field, "") != ""
+            for field in ("displayName", "pubKey", "kasURL")
+        ):
+            raise TdfError("Unsupported policy attribute metadata")
+        attribute_values.append(attribute.get("attribute"))
+    _distinct_attributes(attribute_values)
     assert isinstance(policy, str)
 
     integrity = _object(info.get("integrityInformation"))
@@ -472,6 +544,20 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
             _mac(key, b"".join(tag for _, _, tag in validated_segments)), root_hash
         ):
             raise TdfError("Root integrity check failed")
+        metadata = None
+        metadata_nonce = None
+        if metadata_ciphertext is not None:
+            metadata_nonce = metadata_ciphertext[:NONCE_SIZE]
+            metadata = (
+                AESGCM(key)
+                .decrypt(
+                    metadata_nonce,
+                    metadata_ciphertext[NONCE_SIZE:],
+                    None,
+                )
+                .decode("utf-8")
+                or None
+            )
         aes = algorithms.AES(key)
         largest_segment = max(size for size, _, _ in validated_segments)
         encrypted_buffer = memoryview(bytearray(largest_segment + OVERHEAD))
@@ -482,12 +568,16 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
                 chunk[-TAG_SIZE:], tag
             ):
                 raise TdfError("Segment framing or integrity check failed")
-            decryptor = Cipher(aes, modes.GCM(chunk[:NONCE_SIZE], tag)).decryptor()
+            nonce = chunk[:NONCE_SIZE]
+            if metadata_nonce is not None and nonce == metadata_nonce:
+                raise TdfError("Metadata and payload reuse a nonce")
+            decryptor = Cipher(aes, modes.GCM(nonce, tag)).decryptor()
             written = decryptor.update_into(
                 chunk[NONCE_SIZE:-TAG_SIZE], plaintext_buffer
             )
             decryptor.finalize()
             output.write(plaintext_buffer[:written])
+        return metadata
 
 
 def open_tdf(
@@ -498,7 +588,25 @@ def open_tdf(
     access_token: str,
     manifest_kas_url: str | None = None,
 ) -> None:
-    """Open a supported TDF ZIP profile after KAS authorization.
+    """Open a supported TDF ZIP profile and discard any authenticated metadata."""
+    open_tdf_with_metadata(
+        source,
+        destination,
+        kas_url=kas_url,
+        access_token=access_token,
+        manifest_kas_url=manifest_kas_url,
+    )
+
+
+def open_tdf_with_metadata(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    kas_url: str,
+    access_token: str,
+    manifest_kas_url: str | None = None,
+) -> str | None:
+    """Open a supported TDF ZIP profile and return its metadata if present.
 
     Only the configured manifest_kas_url, or kas_url by default, is accepted
     in the key access object. HTTP requests use kas_url.
@@ -514,9 +622,10 @@ def open_tdf(
         ):
             _check_directory(content, length)
             with ZipFile(content) as archive:
-                _read(archive, output, kas)
+                metadata = _read(archive, output, kas)
             if os.fstat(content.fileno()).st_size != length:
                 raise TdfError("TDF size changed while reading")
+            return metadata
     except TdfError:
         raise
     except (

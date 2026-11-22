@@ -5,6 +5,7 @@ import base64
 import copy
 import json
 import os
+import shlex
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -28,15 +29,15 @@ def invoke(
     operation: str,
     source: Path,
     output: Path,
-    *,
+    *arguments: str | Path,
     expected_error: str | None = None,
     unchanged: bytes | None = None,
     **environment: str,
 ) -> None:
-    args = [operation, str(source), str(output)]
+    args = [operation, str(source), str(output), *map(str, arguments)]
     if peer == "java":
-        args = [f"-Dexec.args={operation} '{source}' '{output}'"]
-        if operation == "open":
+        args = [f"-Dexec.args={shlex.join(args)}"]
+        if operation in ("open", "open-features"):
             driver = [*driver[:-2], "exec:java"]
     result = subprocess.run(
         driver + args,
@@ -71,12 +72,13 @@ def write_archive(
     payload: bytes,
     *,
     payload_name: str = PAYLOAD,
+    manifest_name: str = SPEC_MANIFEST,
     ambiguous: bool = False,
 ) -> Path:
     encoded = json.dumps(manifest, separators=(",", ":"))
     with ZipFile(path, "w") as archive:
         archive.writestr(payload_name, payload)
-        archive.writestr(SPEC_MANIFEST, encoded)
+        archive.writestr(manifest_name, encoded)
         if ambiguous:
             archive.writestr(JAVA_MANIFEST, encoded)
     return path
@@ -263,6 +265,132 @@ def empty_round_trips(work: Path, commands: dict[str, list[str]]) -> None:
                 print(f"{artifact.stem} → {reader} passed", flush=True)
 
 
+def feature_round_trips(
+    work: Path, commands: dict[str, list[str]], attributes: list[str]
+) -> None:
+    source = work / "input.bin"
+    original = source.read_bytes()
+    metadata = work / "metadata.txt"
+    metadata.write_bytes("release notes • révision 2\n".encode())
+    archives = {}
+    for writer in commands:
+        profiles = ("legacy", "spec") if writer in ("rust", "python") else ("legacy",)
+        for profile in profiles:
+            artifact = work / f"{writer}-{profile}-features.tdf"
+            invoke(
+                writer,
+                commands[writer],
+                "create-spec-features" if profile == "spec" else "create-features",
+                source,
+                artifact,
+                metadata,
+                *attributes,
+            )
+            manifest_name = SPEC_MANIFEST if profile == "spec" else JAVA_MANIFEST
+            manifest, _ = read_archive(artifact, manifest_name)
+            encryption = manifest["encryptionInformation"]
+            policy = json.loads(base64.b64decode(encryption["policy"], validate=True))
+            values = [value["attribute"] for value in policy["body"]["dataAttributes"]]
+            grants = encryption["keyAccess"]
+            if sorted(values) != sorted(attributes) or len(grants) != 1:
+                raise ValueError(f"{artifact.name} has unexpected policy or KAS grants")
+            envelope = json.loads(
+                base64.b64decode(grants[0]["encryptedMetadata"], validate=True)
+            )
+            iv = base64.b64decode(envelope["iv"], validate=True)
+            ciphertext = base64.b64decode(envelope["ciphertext"], validate=True)
+            if len(iv) != 12 or ciphertext[:12] != iv or len(ciphertext) <= 28:
+                raise ValueError(f"{artifact.name} has invalid metadata framing")
+            if metadata.read_text().strip() in json.dumps(manifest, ensure_ascii=False):
+                raise ValueError(f"{artifact.name} exposes the plaintext metadata")
+            archives[artifact] = manifest_name
+
+    def compare(reader: str, artifact: Path) -> None:
+        output = work / f"{artifact.stem}-to-{reader}.bin"
+        invoke(reader, commands[reader], "open-features", artifact, output, metadata)
+        if output.read_bytes() != original:
+            raise ValueError(f"{artifact.name} to {reader} recovered different bytes")
+        print(f"{artifact.stem} → {reader} passed", flush=True)
+
+    for reader in ("rust", "python", "go"):
+        for artifact in archives:
+            compare(reader, artifact)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(
+            pool.map(
+                lambda artifact: compare("java", artifact),
+                (p for p, profile in archives.items() if profile == JAVA_MANIFEST),
+            )
+        )
+
+    one_attribute = work / "one-all-of-value.tdf"
+    invoke(
+        "rust",
+        commands["rust"],
+        "create",
+        source,
+        one_attribute,
+        OTDF_ATTRIBUTE=attributes[0],
+    )
+    partial_token = os.environ["OTDF_SHARED_ACCESS_TOKEN"]
+    for reader in ("rust", "python"):
+        output = work / f"{reader}-partial-control.bin"
+        invoke(
+            reader,
+            commands[reader],
+            "open",
+            one_attribute,
+            output,
+            OTDF_ACCESS_TOKEN=partial_token,
+        )
+        if output.read_bytes() != original:
+            raise ValueError(f"{reader} failed the partial-entitlement control")
+
+    for name in ("java-legacy-features.tdf", "rust-spec-features.tdf"):
+        artifact = work / name
+        manifest, payload = read_archive(artifact, archives[artifact])
+        grant = manifest["encryptionInformation"]["keyAccess"][0]
+        envelope = json.loads(base64.b64decode(grant["encryptedMetadata"]))
+        modified_ciphertext = bytearray(base64.b64decode(envelope["ciphertext"]))
+        modified_ciphertext[-1] ^= 1
+        envelope["ciphertext"] = base64.b64encode(modified_ciphertext).decode("ascii")
+        grant["encryptedMetadata"] = base64.b64encode(
+            json.dumps(envelope).encode()
+        ).decode("ascii")
+        tampered = write_archive(
+            work / f"{artifact.stem}-tampered.tdf",
+            manifest,
+            payload,
+            manifest_name=archives[artifact],
+        )
+        for reader in ("rust", "python"):
+            for label, token in (
+                ("partial", partial_token),
+                ("none", os.environ["OTDF_DENIED_ACCESS_TOKEN"]),
+            ):
+                invoke(
+                    reader,
+                    commands[reader],
+                    "open-features",
+                    artifact,
+                    work / f"{reader}-{label}.bin",
+                    metadata,
+                    expected_error="PermissionDenied"
+                    if reader == "rust"
+                    else "KAS denied access",
+                    OTDF_ACCESS_TOKEN=token,
+                )
+            invoke(
+                reader,
+                commands[reader],
+                "open",
+                tampered,
+                work / f"{reader}-metadata-tampered.bin",
+                expected_error="metadata" if reader == "rust" else "TDF error:",
+            )
+    print("All-of entitlement and encrypted metadata tamper checks passed", flush=True)
+
+
 def check_shared_harness(rust_root: Path, python_root: Path) -> None:
     shared = (
         "tests/interop/README.md",
@@ -283,6 +411,7 @@ def check_shared_harness(rust_root: Path, python_root: Path) -> None:
         "tests/interop/large_payloads.py",
         "tests/conformance/README.md",
         "tests/vectors/zip-profile-v1.json",
+        "docs/capabilities.md",
     )
     for path in shared:
         if (rust_root / path).read_bytes() != (python_root / path).read_bytes():
@@ -393,6 +522,8 @@ def main() -> None:
                     [name for name in archives if name.endswith("-legacy")],
                 )
             )
+        if all_of_attributes := os.environ.get("OTDF_TEST_ALL_OF_ATTRIBUTES"):
+            feature_round_trips(work, commands, all_of_attributes.splitlines())
 
 
 if __name__ == "__main__":

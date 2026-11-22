@@ -3,7 +3,7 @@ import hmac
 import json
 import struct
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Literal
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -11,11 +11,19 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from opentdf_sdk import AccessDenied, TdfError, _tdf, create_tdf, open_tdf
+from opentdf_sdk import (
+    AccessDenied,
+    TdfError,
+    _tdf,
+    create_tdf,
+    open_tdf,
+    open_tdf_with_metadata,
+)
 from opentdf_sdk._kas import Kas
 
 _KAS_URL = "http://localhost:18880"
 _ATTRIBUTE = "https://example.com/attr/department/value/engineering"
+_SECOND_ATTRIBUTE = "https://example.com/attr/region/value/east"
 _SEGMENT_SIZE = 2 * 1024 * 1024
 
 
@@ -108,6 +116,198 @@ def test_roundtrip_across_segment_boundaries(
     assert encrypted_payload == expected
     _open(container, dest)
     assert dest.read_bytes() == data
+
+
+@pytest.mark.parametrize("profile", ["java", "spec"])
+def test_multiple_attributes_and_encrypted_metadata_round_trip(
+    tmp_path: Path, local_key: Callable[[], bytes], profile: Literal["java", "spec"]
+) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    container = tmp_path / "archive.tdf"
+    output = tmp_path / "output.bin"
+    metadata = "Example – 日本語"
+    attributes = (_ATTRIBUTE, _SECOND_ATTRIBUTE)
+    create_tdf(
+        source,
+        container,
+        kas_url=_KAS_URL,
+        access_token="test",
+        attributes=attributes,
+        metadata=metadata,
+        profile=profile,
+    )
+    manifest_name = "manifest.json" if profile == "spec" else "0.manifest.json"
+    with ZipFile(container) as archive:
+        manifest_bytes = archive.read(manifest_name)
+        manifest = json.loads(manifest_bytes)
+        segment_iv = archive.read("0.payload")[:12]
+    assert metadata.encode() not in manifest_bytes
+    info = manifest["encryptionInformation"]
+    policy = json.loads(base64.b64decode(info["policy"]))
+    assert [value["attribute"] for value in policy["body"]["dataAttributes"]] == list(
+        attributes
+    )
+    envelope = json.loads(base64.b64decode(info["keyAccess"][0]["encryptedMetadata"]))
+    iv = base64.b64decode(envelope["iv"])
+    ciphertext = base64.b64decode(envelope["ciphertext"])
+    assert iv == ciphertext[:12]
+    assert (iv[0] & 0x80) and not (segment_iv[0] & 0x80)
+    assert AESGCM(local_key()).decrypt(iv, ciphertext[12:], None) == metadata.encode()
+    assert (
+        open_tdf_with_metadata(container, output, kas_url=_KAS_URL, access_token="test")
+        == metadata
+    )
+    assert output.read_bytes() == source.read_bytes()
+
+
+@pytest.mark.parametrize("metadata", [None, ""])
+def test_absent_or_empty_metadata_returns_none(
+    tmp_path: Path, local_key: Callable[[], bytes], metadata: str | None
+) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    container = tmp_path / "archive.tdf"
+    output = tmp_path / "output.bin"
+    create_tdf(
+        source,
+        container,
+        kas_url=_KAS_URL,
+        access_token="test",
+        attribute=_ATTRIBUTE,
+        metadata=metadata,
+    )
+    assert (
+        open_tdf_with_metadata(container, output, kas_url=_KAS_URL, access_token="test")
+        is None
+    )
+    assert output.read_bytes() == source.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("attribute", "attributes", "error"),
+    [
+        (None, None, "Pass attribute"),
+        (_ATTRIBUTE, [_SECOND_ATTRIBUTE], "Pass attribute"),
+        (None, _ATTRIBUTE, "Pass attribute"),
+        (None, [], "at least one"),
+        (None, [_ATTRIBUTE, _ATTRIBUTE], "Duplicate policy attribute"),
+        (None, [_ATTRIBUTE, "https://example.com/attr/department"], "value FQN"),
+    ],
+)
+def test_create_requires_distinct_policy_attribute_values(
+    tmp_path: Path,
+    attribute: str | None,
+    attributes: Sequence[str] | None,
+    error: str,
+) -> None:
+    source = tmp_path / "source.bin"
+    output = tmp_path / "archive.tdf"
+    with pytest.raises(TdfError, match=error):
+        create_tdf(
+            source,
+            output,
+            kas_url=_KAS_URL,
+            access_token="test",
+            attribute=attribute,
+            attributes=attributes,
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("change", ["duplicate", "empty", "substitute"])
+def test_open_validates_and_binds_all_policy_attributes(
+    tmp_path: Path, local_key: Callable[[], bytes], change: str
+) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    container = tmp_path / "archive.tdf"
+    output = tmp_path / "out.bin"
+    create_tdf(
+        source,
+        container,
+        kas_url=_KAS_URL,
+        access_token="test",
+        attributes=[_ATTRIBUTE, _SECOND_ATTRIBUTE],
+    )
+    with ZipFile(container) as archive:
+        manifest = json.loads(archive.read("0.manifest.json"))
+        payload = archive.read("0.payload")
+    info = manifest["encryptionInformation"]
+    policy = json.loads(base64.b64decode(info["policy"]))
+    values = policy["body"]["dataAttributes"]
+    if change == "duplicate":
+        values[1] = values[0]
+        error = "Duplicate policy attribute"
+    elif change == "empty":
+        values.clear()
+        error = "at least one policy attribute"
+    else:
+        values[1]["attribute"] = "https://example.com/attr/region/value/other"
+        error = "Policy binding failed"
+    info["policy"] = base64.b64encode(json.dumps(policy).encode()).decode()
+    with ZipFile(container, "w") as archive:
+        archive.writestr("0.payload", payload)
+        archive.writestr("0.manifest.json", json.dumps(manifest))
+    with pytest.raises(TdfError, match=error):
+        _open(container, output)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["peer", "ciphertext", "mismatched_iv", "malformed", "invalid_utf8", "payload"],
+)
+def test_open_validates_metadata_even_when_discarding(
+    tmp_path: Path, local_key: Callable[[], bytes], change: str
+) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    container = tmp_path / "archive.tdf"
+    output = tmp_path / "output.bin"
+    _create(source, container)
+    with ZipFile(container) as archive:
+        manifest = json.loads(archive.read("0.manifest.json"))
+        payload = archive.read("0.payload")
+    iv = b"\x01" + b"\xcd" * 11
+    data = b"\xff" if change == "invalid_utf8" else b"peer metadata"
+    ciphertext = bytearray(iv + AESGCM(local_key()).encrypt(iv, data, None))
+    if change == "ciphertext":
+        ciphertext[-17] ^= 1
+    elif change == "mismatched_iv":
+        iv = b"\xe1" * 12
+    elif change == "payload":
+        iv = payload[:12]
+        ciphertext = bytearray(payload)
+    envelope = {
+        "ciphertext": base64.b64encode(ciphertext).decode(),
+        "iv": base64.b64encode(iv).decode(),
+    }
+    if change == "malformed":
+        envelope.pop("iv")
+    manifest["encryptionInformation"]["keyAccess"][0]["encryptedMetadata"] = (
+        base64.b64encode(json.dumps(envelope).encode()).decode()
+    )
+    with ZipFile(container, "w") as archive:
+        archive.writestr("0.payload", payload)
+        archive.writestr("0.manifest.json", json.dumps(manifest))
+    if change == "peer":
+        assert (
+            open_tdf_with_metadata(
+                container, output, kas_url=_KAS_URL, access_token="test"
+            )
+            == data.decode()
+        )
+        discard = tmp_path / "discard.bin"
+        _open(container, discard)
+        assert discard.read_bytes() == output.read_bytes() == source.read_bytes()
+    else:
+        match = "Metadata and payload reuse a nonce" if change == "payload" else None
+        with pytest.raises(TdfError, match=match):
+            _open(container, output)
+        assert not output.exists()
+        assert not list(tmp_path.glob(".tdf-*"))
 
 
 @pytest.mark.parametrize("profile", ["java", "spec"])

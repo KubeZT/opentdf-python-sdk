@@ -234,6 +234,61 @@ def prepare_fixtures(
         f"                      - {CLIENT_ID}\n",
         f"                      - {CLIENT_ID}\n                      - {SHARED_ID}\n",
     )
+    full_condition = "48a0691b-f033-4414-ba71-f755760e387c"
+    policy = checked_replace(
+        policy,
+        "    subject_condition_sdk_client:\n",
+        f"""    subject_condition_sdk_all_of:
+      id: {full_condition}
+      condition:
+        subjectSets:
+          - conditionGroups:
+              - booleanOperator: CONDITION_BOOLEAN_TYPE_ENUM_OR
+                conditions:
+                  - subjectExternalSelectorValue: ".clientId"
+                    operator: SUBJECT_MAPPING_OPERATOR_ENUM_IN
+                    subjectExternalValues:
+                      - {CLIENT_ID}
+    subject_condition_sdk_client:
+""",
+    )
+    # Both readers have value1. Only the primary identity has value2.
+    for value, mapping, attribute, condition in (
+        (
+            "value1",
+            "6e1fdf61-b260-4e6e-a1a5-b32e6bf4d8d1",
+            "0fd363db-27b1-4210-b77b-8c82fe044d41",
+            "86621a00-b63e-42e9-bea5-40ba52d98ede",
+        ),
+        (
+            "value2",
+            "c52be6c5-b14b-4f18-b32a-055c418d1d71",
+            "81f643f8-e050-4b97-a005-b61294d4c8bb",
+            full_condition,
+        ),
+    ):
+        policy = checked_replace(
+            policy,
+            "    subject_mapping_sdk_attribute1:\n",
+            f"""    subject_mapping_sdk_all_of_{value}:
+      id: {mapping}
+      attribute_value_id: {attribute}
+      subject_condition_set_id: {condition}
+    subject_mapping_sdk_attribute1:
+""",
+        )
+        policy = checked_replace(
+            policy,
+            "    subject_mapping_sdk_attribute1_read:\n",
+            f"""    subject_mapping_sdk_all_of_{value}_read:
+      subject_mapping_id: {mapping}
+      action_name: read
+    subject_mapping_sdk_all_of_{value}_create:
+      subject_mapping_id: {mapping}
+      action_name: create
+    subject_mapping_sdk_attribute1_read:
+""",
+        )
     (work / policy_path.parent).mkdir(parents=True)
     (work / policy_path).write_text(policy)
 
@@ -447,6 +502,10 @@ def platform_site(
                     "OTDF_TEST_IDP_URL": keycloak,
                     "OTDF_TEST_DB_PORT": str(db),
                     "OTDF_ATTRIBUTE": ATTRIBUTE,
+                    "OTDF_TEST_ALL_OF_ATTRIBUTES": (
+                        "https://example.com/attr/attr2/value/value1\n"
+                        "https://example.com/attr/attr2/value/value2"
+                    ),
                     "OTDF_CLIENT_ID": CLIENT_ID,
                     "OTDF_CLIENT_SECRET": CLIENT_SECRET,
                     "OTDF_ACCESS_TOKEN": fixture_token(keycloak, CLIENT_ID),

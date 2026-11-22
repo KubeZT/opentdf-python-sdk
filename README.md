@@ -41,8 +41,12 @@ profile with `manifest.json`, the version in the payload reference, and the
 base64-encoded raw policy HMAC. `open_tdf` detects either profile from the
 archive and checks that the manifest fields match.
 
-Both profiles support one RSA-2048 KAS key, one policy attribute, and payloads
-up to 2 TiB. The SDK processes regular files in segments and uses ZIP64
+Pass `attributes=[first_fqn, second_fqn]` in place of `attribute=` to use
+multiple policy attributes. Pass `metadata="your text"` to include encrypted
+UTF-8 metadata. `open_tdf_with_metadata(...)` decrypts the payload and returns
+the metadata if present.
+
+Both profiles support one RSA-2048 KAS grant and payloads up to 2 TiB. The SDK processes regular files in segments and uses ZIP64
 when needed. The writer starts with 2 MiB segments and increases the size
 up to 64 MiB for large files. KAS denial raises `AccessDenied` and leaves
 the destination absent. These profiles cover a subset of the TDF
@@ -83,7 +87,7 @@ make check
 The requirements file installs the SDK in editable mode along with the
 development tools. `make check` runs Ruff, mypy, and pytest. Use `make test` to run just the
 tests or `make format` to apply formatting. See the
-[testing guide](docs/testing.md) for fixtures and planned conformance coverage.
+[testing guide](docs/testing.md) and [capability matrix](docs/capabilities.md).
 
 ## Build a wheel and source distribution
 

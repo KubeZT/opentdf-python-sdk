@@ -3,9 +3,16 @@
 from importlib import metadata as _metadata
 
 from ._kas import AccessDenied, TdfError
-from ._tdf import create_tdf, open_tdf
+from ._tdf import create_tdf, open_tdf, open_tdf_with_metadata
 
-__all__ = ["AccessDenied", "TdfError", "create_tdf", "open_tdf", "version"]
+__all__ = [
+    "AccessDenied",
+    "TdfError",
+    "create_tdf",
+    "open_tdf",
+    "open_tdf_with_metadata",
+    "version",
+]
 
 
 def version() -> str:

@@ -10,12 +10,25 @@ import java.net.URI;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Set;
 
 public final class TdfDriver {
     public static void main(String[] args) throws Exception {
-        if (args.length != 3 || !Set.of("create", "open", "expect-denied").contains(args[0])) {
-            throw new IllegalArgumentException("Usage: create|open|expect-denied INPUT OUTPUT");
+        String operation = args.length == 0 ? "" : args[0];
+        boolean validArgs = switch (operation) {
+            case "create", "open", "expect-denied" -> args.length == 3;
+            case "create-features" -> args.length >= 5;
+            case "open-features" -> args.length == 4;
+            default -> false;
+        };
+        if (!validArgs) {
+            throw new IllegalArgumentException("""
+                    Usage:
+                      create|open|expect-denied INPUT OUTPUT
+                      create-features INPUT OUTPUT METADATA_FILE ATTRIBUTE [ATTRIBUTE ...]
+                      open-features INPUT OUTPUT EXPECTED_METADATA_FILE
+                    """);
         }
 
         URI platform = endpoint("OTDF_PLATFORM_URL");
@@ -39,7 +52,7 @@ public final class TdfDriver {
             var readConfig = Config.newTDFReaderConfig(
                     Config.WithKasAllowlist(kas.toString()),
                     Config.WithSessionKeyType(KeyType.RSA2048Key));
-            if (args[0].equals("expect-denied")) {
+            if (operation.equals("expect-denied")) {
                 expectDenied(sdk, input, readConfig, kas);
                 return;
             }
@@ -47,7 +60,12 @@ public final class TdfDriver {
             Path temp = Files.createTempFile(output.getParent(), ".tdf-interop-", ".tmp");
             try {
                 try (var stream = Files.newOutputStream(temp)) {
-                    if (args[0].equals("create")) {
+                    if (operation.equals("create") || operation.equals("create-features")) {
+                        boolean withFeatures = operation.equals("create-features");
+                        String[] attributes = withFeatures
+                                ? Arrays.copyOfRange(args, 4, args.length)
+                                : new String[]{required("OTDF_ATTRIBUTE")};
+                        String metadata = withFeatures ? Files.readString(Path.of(args[3])) : "";
                         var kasInfo = new Config.KASInfo();
                         kasInfo.URL = kas.toString();
                         kasInfo.KID = System.getenv("OTDF_KAS_KEY_ID");
@@ -56,13 +74,19 @@ public final class TdfDriver {
                                 Config.withAutoconfigure(false),
                                 Config.WithWrappingKeyAlg(KeyType.RSA2048Key),
                                 Config.withKasInformation(kasInfo),
-                                Config.withDataAttributes(required("OTDF_ATTRIBUTE")));
+                                Config.withDataAttributes(attributes),
+                                Config.withMetaData(metadata));
                         try (var plaintext = Files.newInputStream(input)) {
                             sdk.createTDF(plaintext, stream, config);
                         }
                     } else {
                         try (var channel = FileChannel.open(input)) {
-                            sdk.loadTDF(channel, readConfig).readPayload(stream);
+                            var reader = sdk.loadTDF(channel, readConfig);
+                            if (operation.equals("open-features")
+                                    && !Files.readString(Path.of(args[3])).equals(reader.getMetadata())) {
+                                throw new IllegalStateException("Decrypted metadata differs");
+                            }
+                            reader.readPayload(stream);
                         }
                     }
                 }
