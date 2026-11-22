@@ -19,8 +19,10 @@ The [interoperability guide](../tests/interop/README.md) has the setup.
 | Spec ZIP (explicit) | `manifest.json` | `payload.tdf_spec_version` | Raw digest bytes |
 
 The profiles cover a single RSA KAS grant, a single policy attribute, and
-payloads up to 64 MiB. Both write `0.payload`. Spec ZIP readers also resolve
-safe, flat payload member names from the manifest. Go 0.35.0 writes the
+regular files. Writers start at 2 MiB per segment and adapt the segment
+size to the payload. The 64 MiB segment limit and the manifest segment
+budget give an effective capacity of 2 TiB. Both write `0.payload`. Spec ZIP readers
+also resolve safe, flat payload member names from the manifest. Go 0.35.0 writes the
 Java-compatible layout and can read both layouts with `0.payload`. Java
 0.19.1 expects the Java-compatible layout.
 
@@ -33,9 +35,9 @@ tested subset of base TDF.
 | --- | --- |
 | Container | Exactly two stored members, matching profile and version field, one grant, and a valid payload reference. |
 | Integrity | Equal bytes across segment boundaries. Reject ciphertext tampering and leave the destination absent. |
+| Large files | Compare generated 80 MiB and 256 MiB cases with peak RSS limits and opt-in 8 GiB ZIP64 and 256 GiB adaptive-segment cases. |
 | Key access | Allow two entitled identities on the same KAS. Reject invalid credentials, unentitled identities, and unreachable KAS. |
 
 Record the revision, license, and checksum of any fixture brought in from
 the [upstream suite](https://github.com/opentdf/tests). Keep credentials and
-generated private keys out of fixtures. KubeZT supplies its own package as
-payload bytes and owns the `.kube` extension.
+generated private keys out of fixtures.

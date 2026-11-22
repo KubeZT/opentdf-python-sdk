@@ -280,6 +280,7 @@ def check_shared_harness(rust_root: Path, python_root: Path) -> None:
         "tests/interop/java/src/main/java/TdfDriver.java",
         "tests/interop/federation.md",
         "tests/interop/federation.py",
+        "tests/interop/large_payloads.py",
         "tests/conformance/README.md",
         "tests/vectors/zip-profile-v1.json",
     )

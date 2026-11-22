@@ -31,3 +31,19 @@ reuse an existing build. The runner still provisions a fresh test stack.
 For a pre-provisioned platform, use the [manual KAS setup](java/local-kas.md)
 and run `sh tests/interop/matrix.sh` directly. The [federation suite](federation.md) starts independent sites. Run it alone
 with `make test-federation`.
+
+## Large payloads
+
+Run `make test-large` to build downstream consumers, start a fresh local KAS,
+and compare generated binary payloads across both SDKs. The Rust test
+consumer uses a release build. On macOS and Linux,
+the suite checks peak resident memory in each consumer process. Each
+operation must stay at or below 128 MiB, with growth at or below 32 MiB
+between the 80 MiB and 256 MiB cases. Failed reads must leave no new output
+or temporary file.
+
+Set `OTDF_TEST_ZIP64=1` to include the 8 GiB + 1 byte ZIP64 round trips. Set
+`OTDF_TEST_HUNDREDS_GIB=1` to exercise adaptive segmentation at 256 GiB.
+Allow about 25 GiB of free temporary disk for the ZIP64 case or 520 GiB
+for the 256 GiB case. Both are opt-in. The tests generate and discard
+their files locally.

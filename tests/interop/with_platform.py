@@ -185,6 +185,10 @@ def endpoint_ready(url: str) -> bool:
         return bool(response.status == 200)
 
 
+def suite_timeout() -> int:
+    return 10800 if os.environ.get("OTDF_TEST_HUNDREDS_GIB") == "1" else 1500
+
+
 def prepare_fixtures(
     source: Path, work: Path, platform: str, keycloak: str, db: int
 ) -> None:
@@ -209,7 +213,7 @@ def prepare_fixtures(
     realm = checked_replace(
         realm,
         "      realm: opentdf\n",
-        "      realm: opentdf\n      accessTokenLifespan: 1800\n",
+        f"      realm: opentdf\n      accessTokenLifespan: {suite_timeout() + 300}\n",
     )
     marker = f"      - client:\n          clientID: {CLIENT_ID}\n"
     start = realm.index(marker)
@@ -481,7 +485,7 @@ def run_with_platform(args: argparse.Namespace, work: Path) -> int:
     with platform_site(source, binary, work / "site") as env:
         command = subprocess.Popen(args.command, env=env, start_new_session=True)
         try:
-            result = command.wait(timeout=1500)
+            result = command.wait(timeout=suite_timeout())
             return result if result >= 0 else 128 - result
         finally:
             stop(command)

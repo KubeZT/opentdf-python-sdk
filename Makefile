@@ -26,3 +26,7 @@ test-e2e:
 .PHONY: test-federation
 test-federation:
 	RUST_SDK="$(RUST_SDK)" "$(PYTHON)" -m pytest -m e2e -k federation -s tests/interop/test_e2e.py
+
+.PHONY: test-large
+test-large:
+	RUST_SDK="$(RUST_SDK)" "$(PYTHON)" -m pytest -m e2e -k large_payloads -s tests/interop/test_e2e.py

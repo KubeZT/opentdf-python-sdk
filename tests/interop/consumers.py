@@ -10,7 +10,7 @@ import tarfile
 from pathlib import Path
 
 
-def rust_consumer(sdk: Path, work: Path) -> list[str]:
+def rust_consumer(sdk: Path, work: Path, *, release: bool) -> list[str]:
     package_target = work / "rust-package"
     subprocess.run(
         [
@@ -40,13 +40,13 @@ def rust_consumer(sdk: Path, work: Path) -> list[str]:
     )
     shutil.copyfile(dependency / "Cargo.lock", project / "Cargo.lock")
     shutil.copyfile(dependency / "examples/tdf_driver.rs", project / "src/main.rs")
-    subprocess.run(
-        ["cargo", "build", "--target-dir", str(package_target)],
-        cwd=project,
-        check=True,
-    )
+    build = ["cargo", "build", "--target-dir", str(package_target)]
+    if release:
+        build.append("--release")
+    subprocess.run(build, cwd=project, check=True)
     executable = "tdf-consumer.exe" if os.name == "nt" else "tdf-consumer"
-    return [str(package_target / "debug" / executable)]
+    profile = "release" if release else "debug"
+    return [str(package_target / profile / executable)]
 
 
 def python_consumer(sdk: Path, work: Path) -> list[str]:
@@ -85,9 +85,9 @@ def python_consumer(sdk: Path, work: Path) -> list[str]:
 
 
 def packaged_commands(
-    rust_root: Path, python_root: Path, work: Path
+    rust_root: Path, python_root: Path, work: Path, *, release: bool = False
 ) -> dict[str, list[str]]:
     return {
-        "rust": rust_consumer(rust_root, work),
+        "rust": rust_consumer(rust_root, work, release=release),
         "python": python_consumer(python_root, work),
     }

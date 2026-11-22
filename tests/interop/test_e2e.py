@@ -12,6 +12,7 @@ import pytest
     [
         pytest.param("matrix.py", True, id="interoperability"),
         pytest.param("federation.py", False, id="federation"),
+        pytest.param("large_payloads.py", True, id="large_payloads"),
     ],
 )
 def test_packaged_sdks(script: str, start_stack: bool) -> None:

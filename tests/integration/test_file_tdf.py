@@ -1,14 +1,17 @@
 import base64
 import hmac
 import json
+import struct
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from opentdf_sdk import AccessDenied, TdfError, create_tdf, open_tdf
+from opentdf_sdk import AccessDenied, TdfError, _tdf, create_tdf, open_tdf
 from opentdf_sdk._kas import Kas
 
 _KAS_URL = "http://localhost:18880"
@@ -72,6 +75,7 @@ def test_roundtrip_across_segment_boundaries(
     with ZipFile(container) as archive:
         assert archive.namelist() == ["0.payload", manifest_name]
         manifest = json.loads(archive.read(manifest_name))
+        encrypted_payload = archive.read("0.payload")
     assert manifest["payload"]["url"] == "0.payload"
     info = manifest["encryptionInformation"]
     policy_binding = info["keyAccess"][0]["policyBinding"]
@@ -91,6 +95,17 @@ def test_roundtrip_across_segment_boundaries(
     assert base64.b64decode(policy_binding["hash"], validate=True) == expected_hmac
     segments = info["integrityInformation"]["segments"]
     assert [item["segmentSize"] for item in segments] == sizes
+    reference = AESGCM(local_key())
+    expected = bytearray()
+    offset = 0
+    for index, segment_size in enumerate(sizes, start=1):
+        nonce = index.to_bytes(12, "big")
+        expected.extend(nonce)
+        expected.extend(
+            reference.encrypt(nonce, data[offset : offset + segment_size], None)
+        )
+        offset += segment_size
+    assert encrypted_payload == expected
     _open(container, dest)
     assert dest.read_bytes() == data
 
@@ -163,9 +178,9 @@ def test_kas_denial_leaves_no_output(
 def test_rejects_oversized_source(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     with source.open("wb") as stream:
-        stream.truncate(64 * 1024 * 1024 + 1)
+        stream.truncate(2 * 1024**4 + 1)
     dest = tmp_path / "out.tdf"
-    with pytest.raises(TdfError, match="64 MiB"):
+    with pytest.raises(TdfError, match="2 TiB"):
         _create(source, dest)
     assert not dest.exists()
 
@@ -256,4 +271,209 @@ def test_spec_rejects_ambiguous_profiles_before_kas(
     with pytest.raises(TdfError):
         _open(updated, dest)
     assert not dest.exists()
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
+@pytest.mark.parametrize("validation", ["valid", "legacy_count", "locator_offset"])
+def test_streamed_zip64_directory(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    validation: str,
+) -> None:
+    # Exercise the standard ZIP64 records without allocating a multi-GiB fixture.
+    monkeypatch.setattr(_tdf, "ZIP64_LIMIT", 1024)
+    monkeypatch.setattr(zipfile, "ZIP64_LIMIT", 1024)
+    source = tmp_path / "input.bin"
+    archive = tmp_path / "archive.tdf"
+    output = tmp_path / "out.bin"
+    source.write_bytes(bytes(range(256)) * 8)
+    _create(source, archive, "spec")
+    contents = bytearray(archive.read_bytes())
+    assert contents[-98:-94] == b"PK\x06\x06"
+    assert contents[-42:-38] == b"PK\x06\x07"
+    assert struct.unpack_from("<HH", contents, len(contents) - 14) == (2, 2)
+
+    if validation == "valid":
+        _open(archive, output)
+        assert output.read_bytes() == source.read_bytes()
+    else:
+        if validation == "legacy_count":
+            struct.pack_into("<H", contents, len(contents) - 12, 3)
+        else:
+            struct.pack_into("<Q", contents, len(contents) - 34, 0)
+        archive.write_bytes(contents)
+        monkeypatch.setattr(Kas, "unwrap", _unexpected_unwrap)
+        with pytest.raises(TdfError, match="Invalid ZIP64 directory"):
+            _open(archive, output)
+        assert not output.exists()
+        assert not list(tmp_path.glob(".tdf-*"))
+
+
+@pytest.mark.parametrize("replacement", [b"short", b"excessively long input"])
+def test_writer_rejects_length_changes_after_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: bytes
+) -> None:
+    source = tmp_path / "input.bin"
+    archive = tmp_path / "archive.tdf"
+    source.write_bytes(b"original input")
+
+    def wrap(kas: Kas, data_key: bytes, key_id: str | None) -> tuple[str, str]:
+        source.write_bytes(replacement)
+        return "r1", "A" * 342 + "=="
+
+    monkeypatch.setattr(Kas, "wrap", wrap)
+    with pytest.raises(TdfError, match="Source size changed while reading"):
+        _create(source, archive)
+    assert not archive.exists()
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
+def test_reader_rejects_archive_growth_after_open(
+    tmp_path: Path, local_key: Callable[[], bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.bin"
+    archive = tmp_path / "archive.tdf"
+    output = tmp_path / "out.bin"
+    source.write_bytes(b"original input")
+    _create(source, archive)
+
+    def unwrap(kas: Kas, policy: str, entry: dict[str, Any]) -> bytes:
+        with archive.open("ab") as file:
+            file.write(b"new data")
+        return local_key()
+
+    monkeypatch.setattr(Kas, "unwrap", unwrap)
+    with pytest.raises(TdfError, match="TDF size changed while reading"):
+        _open(archive, output)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
+def test_writer_keeps_destination_created_during_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.bin"
+    destination = tmp_path / "archive.tdf"
+    source.write_bytes(b"original input")
+
+    def wrap(kas: Kas, data_key: bytes, key_id: str | None) -> tuple[str, str]:
+        destination.write_bytes(b"another writer")
+        return "r1", "A" * 342 + "=="
+
+    monkeypatch.setattr(Kas, "wrap", wrap)
+    with pytest.raises(FileExistsError):
+        _create(source, destination)
+    assert destination.read_bytes() == b"another writer"
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
+@pytest.mark.parametrize("operation", [_create, _open])
+def test_rejects_nonregular_input(
+    tmp_path: Path, operation: Callable[[Path, Path], None]
+) -> None:
+    source = tmp_path / "directory"
+    source.mkdir()
+    destination = tmp_path / "output"
+    with pytest.raises(TdfError, match="regular input file"):
+        operation(source, destination)
+    assert not destination.exists()
+
+
+def test_inclusive_plaintext_limit_reaches_key_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.bin"
+    destination = tmp_path / "archive.tdf"
+    with source.open("wb") as stream:
+        stream.truncate(2 * 1024**4)
+
+    def stop_before_encrypting(
+        kas: Kas, data_key: bytes, key_id: str | None
+    ) -> tuple[str, str]:
+        raise TdfError("Reached key access at limit")
+
+    monkeypatch.setattr(Kas, "wrap", stop_before_encrypting)
+    with pytest.raises(TdfError, match="Reached key access at limit"):
+        _create(source, destination)
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
+@pytest.mark.parametrize("limit", ["segment_count", "segment_size", "manifest"])
+def test_reader_enforces_metadata_limits_before_kas(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    limit: str,
+) -> None:
+    source = tmp_path / "input.bin"
+    source.write_bytes(b"x")
+    archive = tmp_path / "archive.tdf"
+    _create(source, archive, "spec")
+    with ZipFile(archive) as original:
+        manifest = json.loads(original.read("manifest.json"))
+        payload = original.read("0.payload")
+    integrity = manifest["encryptionInformation"]["integrityInformation"]
+    if limit == "segment_count":
+        integrity["segments"] *= 32770
+    elif limit == "segment_size":
+        integrity["segmentSizeDefault"] = 64 * 1024**2 + 1
+        integrity["encryptedSegmentSizeDefault"] = integrity["segmentSizeDefault"] + 28
+    manifest_bytes = json.dumps(manifest).encode()
+    if limit == "manifest":
+        manifest_bytes = manifest_bytes.ljust(4 * 1024**2 + 1, b" ")
+    with ZipFile(archive, "w") as changed:
+        changed.writestr("0.payload", payload)
+        changed.writestr("manifest.json", manifest_bytes)
+
+    output = tmp_path / "out.bin"
+    monkeypatch.setattr(Kas, "unwrap", _unexpected_unwrap)
+    with pytest.raises(TdfError, match="4 MiB|segment or root integrity"):
+        _open(archive, output)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
+def test_oversized_archive_is_rejected_before_zip_parsing(tmp_path: Path) -> None:
+    archive = tmp_path / "oversized.tdf"
+    output = tmp_path / "out.bin"
+    with archive.open("wb") as file:
+        file.truncate(2 * 1024**4 + 32769 * 28 + 4 * 1024**2 + 64 * 1024 + 1)
+    with pytest.raises(TdfError, match="archive size limit"):
+        _open(archive, output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("length", "size", "java_count", "spec_count"),
+    [
+        (0, 2 * 1024**2, 1, 1),
+        (64 * 1024**3 + 1, 3 * 1024**2, 21846, 21846),
+        (256 * 1024**3, 8 * 1024**2, 32769, 32768),
+        (2 * 1024**4, 64 * 1024**2, 32769, 32768),
+    ],
+)
+def test_adaptive_segment_plan(
+    length: int, size: int, java_count: int, spec_count: int
+) -> None:
+    assert _tdf._writer_segment_plan(length, spec=False) == (size, java_count)
+    assert _tdf._writer_segment_plan(length, spec=True) == (size, spec_count)
+
+
+@pytest.mark.parametrize("operation", [_create, _open])
+def test_rejects_dangling_destination_before_file_io(
+    tmp_path: Path, operation: Callable[[Path, Path], None]
+) -> None:
+    source = tmp_path / "input"
+    destination = tmp_path / "destination"
+    missing = tmp_path / "missing"
+    source.write_bytes(b"file bytes")
+    destination.symlink_to(missing)
+
+    with pytest.raises(FileExistsError):
+        operation(source, destination)
+    assert destination.is_symlink()
+    assert destination.readlink() == missing
+    assert not missing.exists()
     assert not list(tmp_path.glob(".tdf-*"))

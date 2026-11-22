@@ -42,8 +42,11 @@ base64-encoded raw policy HMAC. `open_tdf` detects either profile from the
 archive and checks that the manifest fields match.
 
 Both profiles support one RSA-2048 KAS key, one policy attribute, and payloads
-up to 64 MiB. KAS denial raises `AccessDenied` and leaves the destination
-absent. These profiles cover a subset of the TDF specification.
+up to 2 TiB. The SDK processes regular files in segments and uses ZIP64
+when needed. The writer starts with 2 MiB segments and increases the size
+up to 64 MiB for large files. KAS denial raises `AccessDenied` and leaves
+the destination absent. These profiles cover a subset of the TDF
+specification.
 
 ## Use a trusted KAS endpoint for an archived origin
 

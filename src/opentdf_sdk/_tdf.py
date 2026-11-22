@@ -6,15 +6,16 @@ import stat
 import struct
 from collections.abc import Iterator
 from contextlib import contextmanager
+from io import BufferedReader
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import IO, Any, Literal
+from typing import IO, Any, Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
-from zipfile import ZIP_STORED, BadZipFile, ZipFile
+from zipfile import ZIP64_LIMIT, ZIP_STORED, BadZipFile, ZipExtFile, ZipFile
 
 from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from ._kas import Kas, TdfError, decode, encode, utf8_json
 
@@ -22,31 +23,55 @@ JAVA_MANIFEST = "0.manifest.json"
 SPEC_MANIFEST = "manifest.json"
 SCHEMA_VERSION = "4.3.0"
 PAYLOAD = "0.payload"
-SEGMENT_SIZE = 2 * 1024 * 1024
-OVERHEAD = 28
+MIB = 1024**2
+SEGMENT_SIZE = 2 * MIB
+NONCE_SIZE = 12
+TAG_SIZE = 16
+OVERHEAD = NONCE_SIZE + TAG_SIZE
+AES_BLOCK_SLACK = algorithms.AES.block_size // 8 - 1
 # Data descriptor and UTF-8 ZIP member names.
 ZIP_MEMBER_FLAGS = 0x0808
-MAX_PLAINTEXT = 64 * 1024 * 1024
-MAX_MANIFEST = 4 * 1024 * 1024
-MAX_SEGMENTS = 1024
-MAX_SEGMENT_SIZE = 2 * SEGMENT_SIZE
+MAX_MANIFEST = 4 * MIB
+MAX_DATA_SEGMENTS = 32768
+MAX_SEGMENTS = MAX_DATA_SEGMENTS + 1
+MAX_SEGMENT_SIZE = 64 * MIB
+MAX_PLAINTEXT = MAX_SEGMENT_SIZE * MAX_DATA_SEGMENTS
 MAX_ARCHIVE = MAX_PLAINTEXT + MAX_SEGMENTS * OVERHEAD + MAX_MANIFEST + 64 * 1024
+
+
+@contextmanager
+def _input(
+    source: str | Path, limit: int, limit_error: str
+) -> Iterator[tuple[BufferedReader, int]]:
+    # Nonblocking open permits checking a FIFO without waiting for a writer.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(source, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise TdfError("Expected a regular input file")
+        if info.st_size > limit:
+            raise TdfError(limit_error)
+        with os.fdopen(descriptor, "rb", closefd=False) as file:
+            yield file, info.st_size
+    finally:
+        os.close(descriptor)
 
 
 @contextmanager
 def _output(destination: str | Path) -> Iterator[IO[bytes]]:
     target = Path(destination)
-    if target.exists():
+    if os.path.lexists(target):
         raise FileExistsError(target)
-    with NamedTemporaryFile(
+    temp = NamedTemporaryFile(
         mode="w+b", prefix=".tdf-", dir=target.parent, delete=False
-    ) as temp:
-        try:
+    )
+    try:
+        with temp:
             yield temp.file
-            temp.close()
-            os.link(temp.name, target)
-        finally:
-            Path(temp.name).unlink(missing_ok=True)
+        os.link(temp.name, target)
+    finally:
+        Path(temp.name).unlink(missing_ok=True)
 
 
 def _mac(key: bytes, message: bytes) -> bytes:
@@ -82,6 +107,14 @@ def _attribute(value: str) -> None:
         raise TdfError("Expected one data attribute value FQN")
 
 
+def _writer_segment_plan(length: int, *, spec: bool) -> tuple[int, int]:
+    size_step = MAX_DATA_SEGMENTS * MIB
+    size = max(SEGMENT_SIZE, ((length + size_step - 1) // size_step) * MIB)
+    full, remainder = divmod(length, size)
+    count = full + (remainder > 0 or length == 0 or not spec)
+    return size, count
+
+
 def create_tdf(
     source: str | Path,
     destination: str | Path,
@@ -98,46 +131,57 @@ def create_tdf(
     The default matches Java SDK 0.19.1. The spec profile uses the manifest
     filename, version field, and policy HMAC encoding from OpenTDF 4.3.0.
     Supply manifest_kas_url to record a different KAS origin in the archive.
-    HTTP requests use kas_url.
+    Supports plaintext files up to 2 TiB. HTTP requests use kas_url.
     """
     if profile not in ("java", "spec"):
         raise TdfError("Unknown TDF ZIP profile")
     spec = profile == "spec"
     _attribute(attribute)
     kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
-    with Path(source).open("rb") as plaintext, _output(destination) as output:
-        source_info = os.fstat(plaintext.fileno())
-        if not stat.S_ISREG(source_info.st_mode) or source_info.st_size > MAX_PLAINTEXT:
-            raise TdfError("Source must be a regular file no larger than 64 MiB")
-        key = AESGCM.generate_key(bit_length=256)
+    with (
+        _input(source, MAX_PLAINTEXT, "Source exceeded 2 TiB") as (plaintext, length),
+        _output(destination) as output,
+    ):
+        segment_size, segment_count = _writer_segment_plan(length, spec=spec)
+        payload_length = length + segment_count * OVERHEAD
+        key = os.urandom(32)
         kid, wrapped = kas.wrap(key, key_id)
         segments: list[dict[str, str | int]] = []
         tags = bytearray()
-        cipher = AESGCM(key)
-        total = 0
+        aes = algorithms.AES(key)
+        plaintext_buffer = memoryview(bytearray(min(segment_size, length)))
+        encrypted_buffer = memoryview(bytearray(len(plaintext_buffer) + OVERHEAD))
         with ZipFile(output, "w", compression=ZIP_STORED) as archive:
-            with archive.open(PAYLOAD, "w") as payload:
-                while True:
-                    segment = plaintext.read(SEGMENT_SIZE)
-                    if spec and not segment and segments:
-                        break
-                    total += len(segment)
-                    if total > MAX_PLAINTEXT:
-                        raise TdfError("Source exceeded 64 MiB")
-                    nonce = (len(segments) + 1).to_bytes(12, "big")
-                    encrypted = nonce + cipher.encrypt(nonce, segment, None)
-                    payload.write(encrypted)
-                    tag = encrypted[-16:]
+            with archive.open(
+                PAYLOAD, "w", force_zip64=payload_length > ZIP64_LIMIT
+            ) as payload:
+                for index in range(segment_count):
+                    size = min(segment_size, length - index * segment_size)
+                    segment = plaintext_buffer[:size]
+                    if plaintext.readinto(segment) != size:
+                        raise TdfError("Source size changed while reading")
+                    nonce = (index + 1).to_bytes(NONCE_SIZE, "big")
+                    encryptor = Cipher(aes, modes.GCM(nonce)).encryptor()
+                    encrypted_buffer[:NONCE_SIZE] = nonce
+                    # The tag space also supplies the AES block slack for update_into.
+                    encrypted_size = size + OVERHEAD
+                    written = encryptor.update_into(
+                        segment, encrypted_buffer[NONCE_SIZE:encrypted_size]
+                    )
+                    encryptor.finalize()
+                    tag = encryptor.tag
+                    encrypted_buffer[NONCE_SIZE + written : encrypted_size] = tag
+                    payload.write(encrypted_buffer[:encrypted_size])
                     tags.extend(tag)
                     segments.append(
                         {
                             "hash": encode(tag),
-                            "segmentSize": len(segment),
-                            "encryptedSegmentSize": len(encrypted),
+                            "segmentSize": size,
+                            "encryptedSegmentSize": encrypted_size,
                         }
                     )
-                    if len(segment) < SEGMENT_SIZE:
-                        break
+                if plaintext.read(1):
+                    raise TdfError("Source size changed while reading")
             policy = encode(
                 utf8_json(
                     {
@@ -163,52 +207,52 @@ def create_tdf(
                 payload_info["tdf_spec_version"] = SCHEMA_VERSION
             else:
                 manifest["schemaVersion"] = SCHEMA_VERSION
-            archive.writestr(
-                SPEC_MANIFEST if spec else JAVA_MANIFEST,
-                utf8_json(
-                    {
-                        **manifest,
-                        "payload": payload_info,
-                        "assertions": [],
-                        "encryptionInformation": {
-                            "type": "split",
-                            "policy": policy,
-                            "keyAccess": [
-                                {
-                                    "type": "wrapped",
-                                    "url": kas.manifest_url,
-                                    "protocol": "kas",
-                                    "kid": kid,
-                                    "sid": "",
-                                    "encryptedMetadata": "",
-                                    "schemaVersion": "1.0",
-                                    "wrappedKey": wrapped,
-                                    "policyBinding": {
-                                        "alg": "HS256",
-                                        "hash": encode(
-                                            _policy_hash(key, policy, spec=spec)
-                                        ),
-                                    },
-                                }
-                            ],
-                            "method": {
-                                "algorithm": "AES-256-GCM",
-                                "isStreamable": True,
-                            },
-                            "integrityInformation": {
-                                "segmentHashAlg": "GMAC",
-                                "segmentSizeDefault": SEGMENT_SIZE,
-                                "encryptedSegmentSizeDefault": SEGMENT_SIZE + OVERHEAD,
-                                "segments": segments,
-                                "rootSignature": {
+            manifest_bytes = utf8_json(
+                {
+                    **manifest,
+                    "payload": payload_info,
+                    "assertions": [],
+                    "encryptionInformation": {
+                        "type": "split",
+                        "policy": policy,
+                        "keyAccess": [
+                            {
+                                "type": "wrapped",
+                                "url": kas.manifest_url,
+                                "protocol": "kas",
+                                "kid": kid,
+                                "sid": "",
+                                "encryptedMetadata": "",
+                                "schemaVersion": "1.0",
+                                "wrappedKey": wrapped,
+                                "policyBinding": {
                                     "alg": "HS256",
-                                    "sig": encode(_mac(key, bytes(tags))),
+                                    "hash": encode(
+                                        _policy_hash(key, policy, spec=spec)
+                                    ),
                                 },
+                            }
+                        ],
+                        "method": {
+                            "algorithm": "AES-256-GCM",
+                            "isStreamable": True,
+                        },
+                        "integrityInformation": {
+                            "segmentHashAlg": "GMAC",
+                            "segmentSizeDefault": segment_size,
+                            "encryptedSegmentSizeDefault": segment_size + OVERHEAD,
+                            "segments": segments,
+                            "rootSignature": {
+                                "alg": "HS256",
+                                "sig": encode(_mac(key, bytes(tags))),
                             },
                         },
-                    }
-                ),
+                    },
+                }
             )
+            if len(manifest_bytes) > MAX_MANIFEST:
+                raise TdfError("Manifest exceeded 4 MiB")
+            archive.writestr(SPEC_MANIFEST if spec else JAVA_MANIFEST, manifest_bytes)
 
 
 def _object(value: Any) -> dict[str, Any]:
@@ -244,26 +288,38 @@ def _check_directory(file: IO[bytes], length: int) -> None:
     # Bound the ZIP directory before zipfile constructs an object per entry.
     if length < 22:
         raise TdfError("Truncated ZIP")
-    file.seek(-22, os.SEEK_END)
+    footer_offset = length - 22
+    file.seek(footer_offset)
     signature, disk, start_disk, disk_count, count, size, offset, comment = (
         struct.unpack("<4s4H2IH", file.read(22))
     )
     if signature != b"PK\x05\x06" or disk or start_disk or comment:
         raise TdfError("Expected a single-disk ZIP without comments")
+
     footer_size = 22
-    if (disk_count, count, size, offset) == (0xFFFF, 0xFFFF, 0xFFFFFFFF, 0xFFFFFFFF):
+    if footer_offset >= 20:
+        file.seek(footer_offset - 20)
+        locator_signature = file.read(4)
+    else:
+        locator_signature = b""
+    if locator_signature == b"PK\x06\x07":
         footer_size = 98
         if length < footer_size:
             raise TdfError("Truncated ZIP64")
-        file.seek(-footer_size, os.SEEK_END)
+        file.seek(length - footer_size)
         record = struct.unpack("<4sQ2H2I4Q4sIQI", file.read(76))
+        zip64_size, zip64_offset = record[8:10]
         if (
             record[:2] != (b"PK\x06\x06", 44)
             or record[4:8] != (0, 0, 2, 2)
             or record[10:] != (b"PK\x06\x07", 0, length - footer_size, 1)
+            or disk_count not in (2, 0xFFFF)
+            or count not in (2, 0xFFFF)
+            or size not in (zip64_size, 0xFFFFFFFF)
+            or offset not in (zip64_offset, 0xFFFFFFFF)
         ):
             raise TdfError("Invalid ZIP64 directory")
-        size, offset = record[8:10]
+        size, offset = zip64_size, zip64_offset
     elif (disk_count, count) != (2, 2):
         raise TdfError("Expected a two-entry ZIP")
     if size > 4096 or offset + size != length - footer_size:
@@ -408,7 +464,7 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
     ):
         raise TdfError("Invalid payload size")
 
-    with archive.open(payload_name) as encrypted:
+    with cast(ZipExtFile, archive.open(payload_name)) as encrypted:
         key = kas.unwrap(policy, key_access)
         if not hmac.compare_digest(_policy_hash(key, policy, spec=spec), binding_hash):
             raise TdfError("Policy binding failed")
@@ -416,12 +472,22 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
             _mac(key, b"".join(tag for _, _, tag in validated_segments)), root_hash
         ):
             raise TdfError("Root integrity check failed")
-        cipher = AESGCM(key)
+        aes = algorithms.AES(key)
+        largest_segment = max(size for size, _, _ in validated_segments)
+        encrypted_buffer = memoryview(bytearray(largest_segment + OVERHEAD))
+        plaintext_buffer = memoryview(bytearray(largest_segment + AES_BLOCK_SLACK))
         for _, size, tag in validated_segments:
-            chunk = encrypted.read(size)
-            if len(chunk) != size or not hmac.compare_digest(chunk[-16:], tag):
+            chunk = encrypted_buffer[:size]
+            if encrypted.readinto(chunk) != size or not hmac.compare_digest(
+                chunk[-TAG_SIZE:], tag
+            ):
                 raise TdfError("Segment framing or integrity check failed")
-            output.write(cipher.decrypt(chunk[:12], chunk[12:], None))
+            decryptor = Cipher(aes, modes.GCM(chunk[:NONCE_SIZE], tag)).decryptor()
+            written = decryptor.update_into(
+                chunk[NONCE_SIZE:-TAG_SIZE], plaintext_buffer
+            )
+            decryptor.finalize()
+            output.write(plaintext_buffer[:written])
 
 
 def open_tdf(
@@ -439,13 +505,18 @@ def open_tdf(
     """
     kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
     try:
-        with Path(source).open("rb") as content, _output(destination) as output:
-            info = os.fstat(content.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_ARCHIVE:
-                raise TdfError("TDF exceeds the archive size limit")
-            _check_directory(content, info.st_size)
+        with (
+            _input(source, MAX_ARCHIVE, "TDF exceeds the archive size limit") as (
+                content,
+                length,
+            ),
+            _output(destination) as output,
+        ):
+            _check_directory(content, length)
             with ZipFile(content) as archive:
                 _read(archive, output, kas)
+            if os.fstat(content.fileno()).st_size != length:
+                raise TdfError("TDF size changed while reading")
     except TdfError:
         raise
     except (
