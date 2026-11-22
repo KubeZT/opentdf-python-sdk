@@ -22,3 +22,7 @@ RUST_SDK ?= ../opentdf-rust-sdk
 .PHONY: test-e2e
 test-e2e:
 	RUST_SDK="$(RUST_SDK)" "$(PYTHON)" -m pytest -m e2e -s tests/interop/test_e2e.py
+
+.PHONY: test-federation
+test-federation:
+	RUST_SDK="$(RUST_SDK)" "$(PYTHON)" -m pytest -m e2e -k federation -s tests/interop/test_e2e.py

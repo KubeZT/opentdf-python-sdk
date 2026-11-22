@@ -17,6 +17,7 @@ def main() -> None:
         "kas_url": os.environ["OTDF_KAS_URL"],
         "access_token": os.environ["OTDF_ACCESS_TOKEN"],
     }
+    manifest_kas_url = os.environ.get("OTDF_MANIFEST_KAS_URL") or None
     try:
         if args.command in {"create", "create-spec"}:
             create_tdf(
@@ -25,10 +26,13 @@ def main() -> None:
                 attribute=os.environ["OTDF_ATTRIBUTE"],
                 key_id=os.environ.get("OTDF_KAS_KEY_ID"),
                 profile="spec" if args.command == "create-spec" else "java",
+                manifest_kas_url=manifest_kas_url,
                 **kas,
             )
         else:
-            open_tdf(args.source, args.destination, **kas)
+            open_tdf(
+                args.source, args.destination, manifest_kas_url=manifest_kas_url, **kas
+            )
     except AccessDenied as error:
         if args.command != "expect-denied":
             parser.exit(1, f"TDF error: {error}\n")

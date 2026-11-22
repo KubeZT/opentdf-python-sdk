@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Iterator
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlencode
@@ -108,7 +108,7 @@ def local_docker() -> None:
         )
 
 
-def compose_file(work: Path) -> Path:
+def compose_file(work: Path, keycloak_port: str, postgres_port: str) -> Path:
     path = work / "compose.json"
     path.write_text(
         json.dumps(
@@ -123,7 +123,7 @@ def compose_file(work: Path) -> Path:
                             "KC_BOOTSTRAP_ADMIN_PASSWORD": "changeme",
                             "JAVA_OPTS_APPEND": "-XX:UseSVE=0",
                         },
-                        "ports": ["127.0.0.1::8080"],
+                        "ports": [f"127.0.0.1:{keycloak_port}:8080"],
                     },
                     "postgres": {
                         "image": POSTGRES_IMAGE,
@@ -132,7 +132,7 @@ def compose_file(work: Path) -> Path:
                             "POSTGRES_PASSWORD": "changeme",
                             "POSTGRES_DB": "opentdf",
                         },
-                        "ports": ["127.0.0.1::5432"],
+                        "ports": [f"127.0.0.1:{postgres_port}:5432"],
                     },
                 },
             },
@@ -152,6 +152,20 @@ def compose_port(compose: list[str], service: str, port: str) -> int:
     if host != "127.0.0.1" or not bound.isdigit():
         raise ValueError(f"expected a loopback endpoint for {service}")
     return int(bound)
+
+
+def reserve_port(exclude_ports: Collection[int]) -> socket.socket:
+    for _ in range(128):
+        listener = socket.socket()
+        try:
+            listener.bind(("127.0.0.1", 0))
+        except OSError:
+            listener.close()
+            raise
+        if listener.getsockname()[1] not in exclude_ports:
+            return listener
+        listener.close()
+    raise OSError("could not reserve a fresh loopback port")
 
 
 def wait_until(probe: Callable[[], bool], label: str, timeout: int = 90) -> None:
@@ -220,18 +234,32 @@ def prepare_fixtures(
     (work / policy_path).write_text(policy)
 
 
-def generate_keys(work: Path) -> None:
+def generate_keys(work: Path, wrapping_key: Path | None) -> None:
+    if wrapping_key is None:
+        subprocess.run(
+            [
+                "openssl",
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+                "kas-private.pem",
+            ],
+            cwd=work,
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+    else:
+        destination = work / "kas-private.pem"
+        with os.fdopen(
+            os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
+        ) as key:
+            key.write(wrapping_key.read_bytes())
     for command in (
-        [
-            "genpkey",
-            "-algorithm",
-            "RSA",
-            "-pkeyopt",
-            "rsa_keygen_bits:2048",
-            "-out",
-            "kas-private.pem",
-        ],
-        ["pkey", "-in", "kas-private.pem", "-pubout", "-out", "kas-cert.pem"],
+        ["rsa", "-in", "kas-private.pem", "-pubout", "-out", "kas-cert.pem"],
         [
             "ecparam",
             "-name",
@@ -292,125 +320,149 @@ def stop(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=5)
 
 
-def run_with_platform(args: argparse.Namespace, work: Path) -> int:
+@contextlib.contextmanager
+def platform_site(
+    source: Path,
+    binary: Path,
+    work: Path,
+    *,
+    wrapping_key: Path | None = None,
+    exclude_ports: Collection[int] = (),
+) -> Iterator[dict[str, str]]:
+    """Start an isolated test site and return its fixture connection settings."""
     local_docker()
-    source = platform_sources(args.platform_source, work)
-    binary = platform_binary(source, args.platform_binary, work)
+    work = work.resolve()
+    work.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if any(work.iterdir()):
+        raise ValueError("the platform site work directory must be empty")
     project = f"opentdf-tests-{uuid.uuid4().hex[:12]}"
-    compose = ["docker", "compose", "-p", project, "-f", str(compose_file(work))]
     platform_process = None
-    command = None
-    try:
-        subprocess.run([*compose, "up", "-d"], check=True, timeout=300)
-        keycloak = f"http://localhost:{compose_port(compose, 'keycloak', '8080')}"
-        db = compose_port(compose, "postgres", "5432")
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            platform = f"http://localhost:{listener.getsockname()[1]}"
-        prepare_fixtures(source, work, platform, keycloak, db)
-        generate_keys(work)
-
-        def postgres_ready() -> bool:
-            return (
-                subprocess.run(
-                    [
-                        *compose,
-                        "exec",
-                        "-T",
-                        "postgres",
-                        "pg_isready",
-                        "-h",
-                        "127.0.0.1",
-                        "-U",
-                        "postgres",
-                        "-d",
-                        "opentdf",
-                    ],
-                    timeout=5,
-                    capture_output=True,
-                ).returncode
-                == 0
-            )
-
-        wait_until(postgres_ready, "Postgres")
-        wait_until(
-            lambda: endpoint_ready(
-                f"{keycloak}/auth/realms/master/.well-known/openid-configuration"
-            ),
-            "Keycloak",
-        )
-        service_env = {
-            name: value
-            for name, value in os.environ.items()
-            if not name.startswith("OPENTDF_")
-        }
-        with (work / "platform.log").open("w+") as log:
-            for setup in (
-                [
-                    "provision",
-                    "keycloak",
-                    "--endpoint",
-                    f"{keycloak}/auth",
-                    "--file",
-                    "keycloak.yaml",
-                ],
-                ["provision", "fixtures", "--config-file", "opentdf.yaml"],
+    with contextlib.ExitStack() as reserved:
+        keycloak_publish, postgres_publish = "", ""
+        if exclude_ports:
+            # Compose can allocate any free port. Pick two distinct ports first
+            # when a previous site's endpoints must remain unused.
+            with (
+                reserve_port(exclude_ports) as keycloak_socket,
+                reserve_port(exclude_ports) as postgres_socket,
             ):
-                subprocess.run(
-                    [binary, *setup],
+                keycloak_publish = str(keycloak_socket.getsockname()[1])
+                postgres_publish = str(postgres_socket.getsockname()[1])
+        config = compose_file(work, keycloak_publish, postgres_publish)
+        compose = ["docker", "compose", "-p", project, "-f", str(config)]
+        try:
+            subprocess.run([*compose, "up", "-d"], check=True, timeout=300)
+            keycloak_port = compose_port(compose, "keycloak", "8080")
+            db = compose_port(compose, "postgres", "5432")
+            if keycloak_port in exclude_ports or db in exclude_ports:
+                raise RuntimeError("a test container reused an excluded port")
+            keycloak = f"http://localhost:{keycloak_port}"
+            listener = reserved.enter_context(
+                reserve_port({keycloak_port, db, *exclude_ports})
+            )
+            platform = f"http://localhost:{listener.getsockname()[1]}"
+            prepare_fixtures(source, work, platform, keycloak, db)
+            generate_keys(work, wrapping_key)
+
+            def postgres_ready() -> bool:
+                return (
+                    subprocess.run(
+                        [
+                            *compose,
+                            "exec",
+                            "-T",
+                            "postgres",
+                            "pg_isready",
+                            "-h",
+                            "127.0.0.1",
+                            "-U",
+                            "postgres",
+                            "-d",
+                            "opentdf",
+                        ],
+                        timeout=5,
+                        capture_output=True,
+                    ).returncode
+                    == 0
+                )
+
+            wait_until(postgres_ready, "Postgres")
+            wait_until(
+                lambda: endpoint_ready(
+                    f"{keycloak}/auth/realms/master/.well-known/openid-configuration"
+                ),
+                "Keycloak",
+            )
+            service_env = {
+                name: value
+                for name, value in os.environ.items()
+                if not name.startswith("OPENTDF_")
+            }
+            with (work / "platform.log").open("w+") as log:
+                for setup in (
+                    [
+                        "provision",
+                        "keycloak",
+                        "--endpoint",
+                        f"{keycloak}/auth",
+                        "--file",
+                        "keycloak.yaml",
+                    ],
+                    ["provision", "fixtures", "--config-file", "opentdf.yaml"],
+                ):
+                    subprocess.run(
+                        [binary, *setup],
+                        cwd=work,
+                        env=service_env,
+                        check=True,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        timeout=120,
+                    )
+                listener.close()
+                platform_process = subprocess.Popen(
+                    [binary, "start", "--config-file", "opentdf.yaml"],
                     cwd=work,
                     env=service_env,
-                    check=True,
                     stdout=log,
                     stderr=subprocess.STDOUT,
-                    timeout=120,
+                    start_new_session=True,
                 )
-            platform_process = subprocess.Popen(
-                [binary, "start", "--config-file", "opentdf.yaml"],
-                cwd=work,
-                env=service_env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
 
-            def platform_ready() -> bool:
-                if platform_process.poll() is not None:
-                    raise RuntimeError("OpenTDF platform exited during startup")
-                return endpoint_ready(f"{platform}/healthz")
+                def platform_ready() -> bool:
+                    if platform_process.poll() is not None:
+                        raise RuntimeError("OpenTDF platform exited during startup")
+                    return endpoint_ready(f"{platform}/healthz")
 
-            wait_until(platform_ready, "OpenTDF platform")
-            env = {
-                **os.environ,
-                "OTDF_PLATFORM_URL": platform,
-                "OTDF_KAS_URL": platform,
-                "OTDF_KAS_KEY_ID": "r1",
-                "OTDF_ATTRIBUTE": ATTRIBUTE,
-                "OTDF_CLIENT_ID": CLIENT_ID,
-                "OTDF_CLIENT_SECRET": CLIENT_SECRET,
-                "OTDF_ACCESS_TOKEN": fixture_token(keycloak, CLIENT_ID),
-                "OTDF_SHARED_ACCESS_TOKEN": fixture_token(keycloak, SHARED_ID),
-                "OTDF_DENIED_ACCESS_TOKEN": fixture_token(keycloak, DENIED_ID),
-            }
-            print(f"OpenTDF test platform ready at {platform}", flush=True)
-            command = subprocess.Popen(args.command, env=env, start_new_session=True)
-            result = command.wait(timeout=1500)
-            return result if result >= 0 else 128 - result
-    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
-        print(f"OpenTDF test stack failed: {error}", file=sys.stderr)
-        log_path = work / "platform.log"
-        if log_path.exists():
-            print(
-                "".join(
-                    log_path.read_text(errors="replace").splitlines(keepends=True)[-18:]
-                ),
-                file=sys.stderr,
-            )
-        return 1
-    finally:
-        try:
-            if command is not None:
-                stop(command)
+                wait_until(platform_ready, "OpenTDF platform")
+                env = {
+                    **os.environ,
+                    "OTDF_PLATFORM_URL": platform,
+                    "OTDF_KAS_URL": platform,
+                    "OTDF_KAS_KEY_ID": "r1",
+                    "OTDF_TEST_IDP_URL": keycloak,
+                    "OTDF_TEST_DB_PORT": str(db),
+                    "OTDF_ATTRIBUTE": ATTRIBUTE,
+                    "OTDF_CLIENT_ID": CLIENT_ID,
+                    "OTDF_CLIENT_SECRET": CLIENT_SECRET,
+                    "OTDF_ACCESS_TOKEN": fixture_token(keycloak, CLIENT_ID),
+                    "OTDF_SHARED_ACCESS_TOKEN": fixture_token(keycloak, SHARED_ID),
+                    "OTDF_DENIED_ACCESS_TOKEN": fixture_token(keycloak, DENIED_ID),
+                }
+                print(f"OpenTDF test platform ready at {platform}", flush=True)
+                yield env
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+            log_path = work / "platform.log"
+            if log_path.exists():
+                print(
+                    "".join(
+                        log_path.read_text(errors="replace").splitlines(keepends=True)[
+                            -18:
+                        ]
+                    ),
+                    file=sys.stderr,
+                )
+            raise
         finally:
             try:
                 if platform_process is not None:
@@ -421,6 +473,18 @@ def run_with_platform(args: argparse.Namespace, work: Path) -> int:
                     check=True,
                     timeout=60,
                 )
+
+
+def run_with_platform(args: argparse.Namespace, work: Path) -> int:
+    source = platform_sources(args.platform_source, work)
+    binary = platform_binary(source, args.platform_binary, work)
+    with platform_site(source, binary, work / "site") as env:
+        command = subprocess.Popen(args.command, env=env, start_new_session=True)
+        try:
+            result = command.wait(timeout=1500)
+            return result if result >= 0 else 128 - result
+        finally:
+            stop(command)
 
 
 def main() -> int:
@@ -449,7 +513,7 @@ def main() -> int:
             return run_with_platform(args, Path(temporary))
     except KeyboardInterrupt:
         return 130
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print(f"OpenTDF test stack failed: {error}", file=sys.stderr)
         return 1
 

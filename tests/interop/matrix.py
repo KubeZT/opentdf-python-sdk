@@ -40,7 +40,7 @@ def invoke(
             driver = [*driver[:-2], "exec:java"]
     result = subprocess.run(
         driver + args,
-        env=os.environ | environment,
+        env=os.environ | {"OTDF_MANIFEST_KAS_URL": ""} | environment,
         check=False,
         capture_output=expected_error is not None,
         text=True,
@@ -279,6 +279,7 @@ def check_shared_harness(rust_root: Path, python_root: Path) -> None:
         "tests/interop/java/pom.xml",
         "tests/interop/java/src/main/java/TdfDriver.java",
         "tests/interop/federation.md",
+        "tests/interop/federation.py",
         "tests/conformance/README.md",
         "tests/vectors/zip-profile-v1.json",
     )
@@ -287,10 +288,8 @@ def check_shared_harness(rust_root: Path, python_root: Path) -> None:
             raise ValueError(f"shared test harness differs between SDKs: {path}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run the packaged SDK interoperability matrix."
-    )
+def sdk_roots(description: str) -> tuple[Path, Path]:
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
         "python_sdk",
         type=Path,
@@ -310,6 +309,11 @@ def main() -> None:
     python_root = args.python_sdk.resolve()
     rust_root = args.rust_sdk.resolve()
     check_shared_harness(rust_root, python_root)
+    return rust_root, python_root
+
+
+def main() -> None:
+    rust_root, python_root = sdk_roots("Run the packaged SDK interoperability matrix.")
     for name in (
         "OTDF_ACCESS_TOKEN",
         "OTDF_SHARED_ACCESS_TOKEN",

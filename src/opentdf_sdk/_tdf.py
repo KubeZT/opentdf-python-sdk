@@ -91,17 +91,20 @@ def create_tdf(
     attribute: str,
     key_id: str | None = None,
     profile: Literal["java", "spec"] = "java",
+    manifest_kas_url: str | None = None,
 ) -> None:
     """Encrypt a file using the selected TDF ZIP profile.
 
     The default matches Java SDK 0.19.1. The spec profile uses the manifest
     filename, version field, and policy HMAC encoding from OpenTDF 4.3.0.
+    Supply manifest_kas_url to record a different KAS origin in the archive.
+    HTTP requests use kas_url.
     """
     if profile not in ("java", "spec"):
         raise TdfError("Unknown TDF ZIP profile")
     spec = profile == "spec"
     _attribute(attribute)
-    kas = Kas(kas_url, access_token)
+    kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
     with Path(source).open("rb") as plaintext, _output(destination) as output:
         source_info = os.fstat(plaintext.fileno())
         if not stat.S_ISREG(source_info.st_mode) or source_info.st_size > MAX_PLAINTEXT:
@@ -173,7 +176,7 @@ def create_tdf(
                             "keyAccess": [
                                 {
                                     "type": "wrapped",
-                                    "url": kas.url,
+                                    "url": kas.manifest_url,
                                     "protocol": "kas",
                                     "kid": kid,
                                     "sid": "",
@@ -328,18 +331,19 @@ def _read(archive: ZipFile, output: IO[bytes], kas: Kas) -> None:
         raise TdfError("Expected AES-256-GCM with one RSA-wrapped key")
     key_access = _object(keys[0])
     binding = _object(key_access.get("policyBinding"))
+    if key_access.get("url") != kas.manifest_url:
+        raise TdfError("Untrusted manifest KAS origin")
     if (
         key_access.get("type") != "wrapped"
         or key_access.get("protocol") != "kas"
         or key_access.get("schemaVersion") != "1.0"
         or key_access.get("sid", "") != ""
         or key_access.get("encryptedMetadata", "") != ""
-        or key_access.get("url") != kas.url
         or not isinstance(key_access.get("kid"), str)
         or not key_access["kid"]
         or binding.get("alg") != "HS256"
     ):
-        raise TdfError("Unsupported key access entry or untrusted KAS")
+        raise TdfError("Unsupported key access entry")
     decode(key_access.get("wrappedKey"), 256)
     binding_hash = decode(binding.get("hash"), 32 if spec else 64)
     if not spec and not re.fullmatch(rb"[0-9a-f]{64}", binding_hash):
@@ -426,9 +430,14 @@ def open_tdf(
     *,
     kas_url: str,
     access_token: str,
+    manifest_kas_url: str | None = None,
 ) -> None:
-    """Open a supported TDF ZIP profile after KAS authorization."""
-    kas = Kas(kas_url, access_token)
+    """Open a supported TDF ZIP profile after KAS authorization.
+
+    Only the configured manifest_kas_url, or kas_url by default, is accepted
+    in the key access object. HTTP requests use kas_url.
+    """
+    kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
     try:
         with Path(source).open("rb") as content, _output(destination) as output:
             info = os.fstat(content.fileno())

@@ -48,28 +48,42 @@ def _oaep() -> padding.OAEP:
     )
 
 
+def _origin(url: str) -> tuple[str, int | None, bool]:
+    if any(not 0x21 <= ord(c) <= 0x7E for c in url) or any(c in url for c in "?#\\"):
+        raise TdfError("KAS URL must be an HTTP(S) origin")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise TdfError("Invalid KAS origin") from exc
+    host = parsed.hostname
+    authority = parsed.netloc
+    ipv6_suffix = authority.rpartition("]")[2] if authority.startswith("[") else ""
+    if (
+        not host
+        or parsed.username is not None
+        or parsed.path not in {"", "/"}
+        or authority.endswith(":")
+        or ("[" in authority and not authority.startswith("["))
+        or (ipv6_suffix and not ipv6_suffix.startswith(":"))
+        or parsed.scheme not in {"https", "http"}
+    ):
+        raise TdfError("KAS URL must be an HTTP(S) origin")
+    if parsed.scheme == "http" and host not in {"localhost", "127.0.0.1", "::1"}:
+        raise TdfError("KAS HTTP is limited to loopback")
+    return host, port, parsed.scheme == "https"
+
+
 class Kas:
-    def __init__(self, url: str, token: str) -> None:
-        try:
-            parsed = urlsplit(url)
-            port = parsed.port
-        except ValueError as exc:
-            raise TdfError("Invalid KAS origin") from exc
-        if (
-            not parsed.hostname
-            or parsed.username is not None
-            or parsed.path not in {"", "/"}
-            or parsed.query
-            or parsed.fragment
-            or parsed.scheme not in {"https", "http"}
-        ):
-            raise TdfError("KAS URL must be an HTTP(S) origin")
-        if parsed.scheme == "http" and parsed.hostname not in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-        }:
-            raise TdfError("KAS HTTP is limited to loopback")
+    def __init__(
+        self, url: str, token: str, *, manifest_kas_url: str | None = None
+    ) -> None:
+        self.host, self.port, self.https = _origin(url)
+        if manifest_kas_url is not None:
+            _origin(manifest_kas_url)
+        self.manifest_url = (
+            manifest_kas_url if manifest_kas_url is not None else url
+        ).removesuffix("/")
         if (
             not token
             or not token.isascii()
@@ -78,10 +92,6 @@ class Kas:
             raise TdfError(
                 "Access token must contain printable ASCII without whitespace"
             )
-        self.url = url.rstrip("/")
-        self.host = parsed.hostname
-        self.port = port
-        self.https = parsed.scheme == "https"
         self.token = token
 
     def _post(self, method: str, body: dict[str, Any]) -> dict[str, Any]:

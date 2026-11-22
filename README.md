@@ -45,6 +45,27 @@ Both profiles support one RSA-2048 KAS key, one policy attribute, and payloads
 up to 64 MiB. KAS denial raises `AccessDenied` and leaves the destination
 absent. These profiles cover a subset of the TDF specification.
 
+## Use a trusted KAS endpoint for an archived origin
+
+When the archive names a KAS origin that differs from your reachable
+endpoint, pass the expected origin as `manifest_kas_url` alongside
+`kas_url` and an access token for that endpoint.
+
+```python
+kas = {
+    "kas_url": "http://localhost:18880",
+    "manifest_kas_url": "https://kas.example.com",
+    "access_token": os.environ["OTDF_ACCESS_TOKEN"],
+}
+open_tdf("archive.tdf", "recovered.bin", **kas)
+```
+
+`create_tdf` records the same configured origin in new archives.
+`open_tdf` requires the archive's key access object to match that origin
+exactly, after trimming an optional trailing slash from the configuration.
+Public key and rewrap calls use `kas_url`. Both URLs must be HTTPS origins
+or loopback HTTP origins.
+
 ## Work on the SDK
 
 From this checkout:
@@ -53,11 +74,11 @@ From this checkout:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
-python -m pip install --no-build-isolation -e .
 make check
 ```
 
-`make check` runs Ruff, mypy, and pytest. Use `make test` to run just the
+The requirements file installs the SDK in editable mode along with the
+development tools. `make check` runs Ruff, mypy, and pytest. Use `make test` to run just the
 tests or `make format` to apply formatting. See the
 [testing guide](docs/testing.md) for fixtures and planned conformance coverage.
 
