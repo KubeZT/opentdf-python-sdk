@@ -1,0 +1,6 @@
+This independent SDK references OpenTDF, the Trusted Data Format project.
+It is unaffiliated with and has no endorsement from the OpenTDF project.
+
+The OpenTDF specification, test suite, and Java SDK are upstream
+references. This scaffold includes original project code and fixtures.
+See docs/testing.md for source and licensing information.
