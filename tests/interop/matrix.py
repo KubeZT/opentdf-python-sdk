@@ -644,10 +644,14 @@ def check_shared_harness(rust_root: Path, python_root: Path) -> None:
         "tests/interop/federation.md",
         "tests/interop/federation.py",
         "tests/interop/large_payloads.py",
+        "tests/interop/release.py",
         "tests/conformance/README.md",
+        "tests/vectors/sdk-version.txt",
         "tests/vectors/zip-profile-v1.json",
         "docs/capabilities.md",
         "docs/conformance.md",
+        "docs/profiles.md",
+        "docs/release.md",
     )
     for path in shared:
         if (rust_root / path).read_bytes() != (python_root / path).read_bytes():

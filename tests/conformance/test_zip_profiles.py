@@ -119,3 +119,26 @@ def test_shared_zip_profile_conformance(
             open_case()
         assert called is (expected == "reject-after-key")
         assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(content, id=case)
+        for case, content in _CORPUS["foreign_inputs"].items()
+    ],
+)
+def test_rejects_foreign_profile_input(
+    content: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.tdf"
+    dest = tmp_path / "restored.bin"
+    source.write_bytes(base64.b64decode(content))
+
+    def rewrap(kas: Kas, policy: str, entry: dict[str, Any]) -> bytes:
+        pytest.fail("A foreign profile input triggered KAS access")
+
+    monkeypatch.setattr(Kas, "unwrap", rewrap)
+    with pytest.raises(TdfError):
+        open_tdf(source, dest, kas_url=_CORPUS["kas_url"], access_token="test")
+    assert list(tmp_path.iterdir()) == [source]

@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from opentdf_sdk import (
@@ -11,10 +12,14 @@ from opentdf_sdk import (
     create_tdf,
     open_tdf,
     open_tdf_with_metadata,
+    version,
 )
 
 
 def main() -> None:
+    if sys.argv[1:] == ["version"]:
+        print(version())
+        return
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",

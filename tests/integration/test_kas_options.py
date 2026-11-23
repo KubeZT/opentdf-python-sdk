@@ -45,6 +45,28 @@ def _decode_url(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
+def test_empty_wrapping_key_id_rejected_before_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_request(*args: object) -> None:
+        pytest.fail("Invalid wrapping key ID reached KAS")
+
+    monkeypatch.setattr(KasConfig, "_post", unexpected_request)
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    destination = tmp_path / "archive.tdf"
+    with pytest.raises(TdfError, match="Invalid KAS key ID"):
+        create_tdf(
+            source,
+            destination,
+            kas=KasConfig(_KAS, "test"),
+            attribute=_ATTRIBUTE,
+            key_id="",
+        )
+    assert not destination.exists()
+    assert not any(tmp_path.glob(".tdf-*"))
+
+
 @pytest.mark.parametrize("profile", ["java", "spec"])
 def test_p256_key_access_for_ec_and_rsa_sessions(
     tmp_path: Path,

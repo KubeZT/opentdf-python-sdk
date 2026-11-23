@@ -202,6 +202,8 @@ class KasConfig:
     ) -> tuple[str, str] | tuple[str, str, str]:
         request: dict[str, str] = {"algorithm": self._algorithm}
         if key_id is not None:
+            if not isinstance(key_id, str) or not key_id:
+                raise TdfError("Invalid KAS key ID")
             request["kid"] = key_id
         response = self._post("PublicKey", request)
         kid, pem = response.get("kid"), response.get("publicKey")

@@ -40,5 +40,8 @@ Each signature covers its statement and the ordered payload segment tags.
 RS256 identifies the signer through the caller's configured public key.
 Require an assertion ID on open when its presence matters.
 
+The [profile acceptance plan](profiles.md) tracks ACP 240 ZTDF, IC-TDF,
+and NanoTDF as future profiles. Each has its own fixtures and criteria.
+
 Run `make test-e2e` to reproduce the matrix locally. See the
 [interop guide](../tests/interop/README.md) for setup and the larger ZIP64 cases.

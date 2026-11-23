@@ -5,7 +5,7 @@ import struct
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -436,6 +436,32 @@ def test_spec_payload_reference_must_be_flat_and_safe(
 
 def _unexpected_unwrap(kas: Kas, policy: str, entry: dict[str, Any]) -> bytes:
     raise AssertionError("Malformed archive reached KAS")
+
+
+@pytest.mark.parametrize("invalid_id", ["", 123])
+def test_invalid_assertion_key_id_rejected_before_rewrap(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_id: str | int,
+) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    container = tmp_path / "archive.tdf"
+    _create(source, container)
+    monkeypatch.setattr(Kas, "unwrap", _unexpected_unwrap)
+    destination = tmp_path / "recovered.bin"
+    verification_keys = cast("dict[str, bytes]", {invalid_id: b"key"})
+    with pytest.raises(TdfError, match="Invalid assertion verification key ID"):
+        open_tdf(
+            container,
+            destination,
+            kas_url=_KAS_URL,
+            access_token="test",
+            assertion_verification_keys=verification_keys,
+        )
+    assert not destination.exists()
+    assert not any(tmp_path.glob(".tdf-*"))
 
 
 @pytest.mark.parametrize(

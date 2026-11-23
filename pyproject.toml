@@ -12,12 +12,15 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 keywords = ["opentdf", "tdf"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Typing :: Typed",
 ]
 dependencies = ["cryptography>=45,<50"]
+
+[project.urls]
+Repository = "https://github.com/KubeZT/opentdf-python-sdk"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -598,6 +598,18 @@
         "/encryptionInformation/keyAccess/0/wrappedKey": "AA==",
         "/encryptionInformation/keyAccess/0/ephemeralPublicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ3\n8hs1pgtI/EdmmXgHd1UQ247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==\n-----END PUBLIC KEY-----\n"
       }
+    },
+    {
+      "id": "ASSERTION-OBJECT-STATEMENT",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/statement/value": {
+          "label": "test"
+        }
+      }
     }
   ],
   "known_assertions": {
@@ -693,5 +705,9 @@
   "assertion_public_keys": {
     "publisher": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApdIEjG2CuxFlnDuLPwui\n56zKtnVnulYAptJm88Iwgs0/SGA3GluZf/NF4LD4By2WB40UpLkbS1ckibI5j43b\n7WZTAeF1/V5Bm6HWwNK19SqaD+t3BaXUtru9bYC0DEPvGy/YVcgh/WTAJQaxT3/t\nfhfvUWMhNpaCSODcgvxG8PUPoZOBCfBvjaWN9He5V8HdEdMC6U4ec8MIVYxSyTl6\nPEZoPAhvmkysfGtUk15qENDNWVhMX2cPW5DXVktf9x8le4SfjPMtRPyCUvNBUuqc\nzwo2l1ouyc5cJ9ZOsjvizLqMAzx9qpFnBpisDvO8nmWXQZNrksYH8oXcRTeeZWfU\n4QIDAQAB\n-----END PUBLIC KEY-----\n",
     "wrong": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmb1ESeKHWLljPZB52FD5\nid7BXb2fiaB9j4oV/cNrVzpUtT6PPNtBvoY95IXrdQ1rgcWK20LSRWjMYwGooSIF\nQgiR2SHbGb+GfeJEM3wzIygA2cfSgFDK6lgTzDVA5ExD/RBAyQm8htKOD203xAV8\nejBl1LwSbTh9dp5vFy2fqd5med72MDnFrLrs2ux0lisr0AU07N9vemR6+qjD3B+k\nMkbn6j8fmPGTsUI8kO4w4yvgOOIoMvWfsIWCTcLjGgOQoKP4KB4fy9VqlUrtqiJ5\nS5dtjSwl6PvFH++87LY90QmqGBSk+mSbg77ZzlxZk2xCouN1PD5Xfg4e5UgKWXXm\npQIDAQAB\n-----END PUBLIC KEY-----\n"
+  },
+  "foreign_inputs": {
+    "FOREIGN-IC-TDF-XML": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHRkZjpUcnVzdGVkRGF0YU9iamVjdCB4bWxuczp0ZGY9InVybjp1czpnb3Y6aWM6dGRmIj4KICA8dGRmOkJhc2U2NEJpbmFyeVBheWxvYWQ+ZEdWemRBPT08L3RkZjpCYXNlNjRCaW5hcnlQYXlsb2FkPgo8L3RkZjpUcnVzdGVkRGF0YU9iamVjdD4K",
+    "FOREIGN-NANOTDF-L1L": "TDFMERNrYXMuZXhhbXBsZS5pbnZhbGlkazEABQ=="
   }
 }

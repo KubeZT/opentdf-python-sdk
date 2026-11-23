@@ -635,6 +635,13 @@ def open_tdf_with_metadata(
     their presence and map RS256 assertion IDs to trusted RSA public keys in PEM.
     """
     config = _select_kas(kas, kas_url, access_token, manifest_kas_url)
+    verification_keys = (
+        {} if assertion_verification_keys is None else assertion_verification_keys
+    )
+    if not isinstance(verification_keys, Mapping) or any(
+        not isinstance(id_, str) or not id_ for id_ in verification_keys
+    ):
+        raise TdfError("Invalid assertion verification key ID")
     try:
         with (
             _input(source, MAX_ARCHIVE, "TDF exceeds the archive size limit") as (
@@ -650,7 +657,7 @@ def open_tdf_with_metadata(
                     output,
                     config,
                     required_assertions,
-                    assertion_verification_keys or {},
+                    verification_keys,
                 )
             if os.fstat(content.fileno()).st_size != length:
                 raise TdfError("TDF size changed while reading")
