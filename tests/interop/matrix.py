@@ -15,6 +15,7 @@ from typing import Any
 from zipfile import ZipFile
 
 from consumers import packaged_commands
+from with_platform import DENIED_ID, SHARED_ID
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -37,7 +38,7 @@ def invoke(
     args = [operation, str(source), str(output), *map(str, arguments)]
     if peer == "java":
         args = [f"-Dexec.args={shlex.join(args)}"]
-        if operation in ("open", "open-features", "open-assertions", "open-p256"):
+        if operation.startswith("open"):
             driver = [*driver[:-2], "exec:java"]
     result = subprocess.run(
         driver + args,
@@ -272,10 +273,20 @@ def compare_feature_archives(
     original: bytes,
     operation: str,
     *arguments: Path,
+    **environment: str,
 ) -> None:
     def compare(reader: str, artifact: Path) -> None:
         output = work / f"{artifact.stem}-to-{reader}.bin"
-        invoke(reader, commands[reader], operation, artifact, output, *arguments)
+        invoke(
+            reader,
+            commands[reader],
+            operation,
+            artifact,
+            output,
+            *arguments,
+            unchanged=None,
+            **environment,
+        )
         if output.read_bytes() != original:
             raise ValueError(f"{artifact.name} to {reader} recovered different bytes")
         print(f"{artifact.stem} → {reader} passed", flush=True)
@@ -526,31 +537,30 @@ def feature_round_trips(
     print("All-of entitlement and encrypted metadata tamper checks passed", flush=True)
 
 
+def generate_signing_key(work: Path, name: str) -> tuple[Path, Path]:
+    private = work / f"{name}-private.pem"
+    public = work / f"{name}-public.pem"
+    for args in (
+        [
+            "genpkey",
+            "-algorithm",
+            "RSA",
+            "-pkeyopt",
+            "rsa_keygen_bits:2048",
+            "-out",
+            str(private),
+        ],
+        ["pkey", "-in", str(private), "-pubout", "-out", str(public)],
+    ):
+        subprocess.run(["openssl", *args], check=True, capture_output=True, timeout=30)
+    return private, public
+
+
 def assertion_round_trips(
     work: Path, commands: dict[str, list[str]], source: Path, original: bytes
 ) -> None:
-    def generate_key(name: str) -> tuple[Path, Path]:
-        private = work / f"{name}-private.pem"
-        public = work / f"{name}-public.pem"
-        for args in (
-            [
-                "genpkey",
-                "-algorithm",
-                "RSA",
-                "-pkeyopt",
-                "rsa_keygen_bits:2048",
-                "-out",
-                str(private),
-            ],
-            ["pkey", "-in", str(private), "-pubout", "-out", str(public)],
-        ):
-            subprocess.run(
-                ["openssl", *args], check=True, capture_output=True, timeout=30
-            )
-        return private, public
-
-    private, public = generate_key("publisher")
-    _, wrong_key = generate_key("wrong-publisher")
+    private, public = generate_signing_key(work, "publisher")
+    _, wrong_key = generate_signing_key(work, "wrong-publisher")
     archives = {}
     for writer in commands:
         profiles = ("legacy", "spec") if writer in ("rust", "python") else ("legacy",)
@@ -622,6 +632,128 @@ def assertion_round_trips(
             raise ValueError(f"{reader} left output files after rejecting an assertion")
     print(
         "Assertion tamper, transplant, missing ID, and wrong-key checks passed",
+        flush=True,
+    )
+
+
+def composed_round_trips(
+    work: Path,
+    commands: dict[str, list[str]],
+    source: Path,
+    original: bytes,
+    attributes: list[str],
+) -> None:
+    private, public = generate_signing_key(work, "composed-publisher")
+    metadata = work / "composed-metadata.txt"
+    metadata.write_text("révision 🚀\n\x00binary payload metadata\n", encoding="utf-8")
+    archives = {}
+    auth = {
+        "OTDF_TEST_AUTH_MODE": "discover-client-credentials",
+        "OTDF_ACCESS_TOKEN": "",
+    }
+    for writer, driver in commands.items():
+        profiles = (
+            (JAVA_MANIFEST, SPEC_MANIFEST)
+            if writer in ("rust", "python")
+            else (JAVA_MANIFEST,)
+        )
+        for profile in profiles:
+            spec = profile == SPEC_MANIFEST
+            artifact = work / f"{writer}-{'spec' if spec else 'legacy'}-composed.tdf"
+            invoke(
+                writer,
+                driver,
+                "create-spec-composed-p256" if spec else "create-composed-p256",
+                source,
+                artifact,
+                private,
+                metadata,
+                *attributes,
+                unchanged=None,
+                **auth,
+            )
+            manifest, _ = read_archive(artifact, profile)
+            enc = manifest["encryptionInformation"]
+            (grant,) = enc["keyAccess"]
+            body = json.loads(base64.b64decode(enc["policy"], validate=True))["body"]
+            if (
+                grant["type"] != "ec-wrapped"
+                or not grant["encryptedMetadata"]
+                or sorted(a["attribute"] for a in body["dataAttributes"])
+                != sorted(attributes)
+                or {a["id"] for a in manifest["assertions"]}
+                != {"tdf-binding", "publisher"}
+            ):
+                raise ValueError(f"{artifact.name} lost a composed feature")
+            archives[artifact] = profile
+    compare_feature_archives(
+        work,
+        commands,
+        archives,
+        original,
+        "open-composed-p256",
+        public,
+        metadata,
+        **auth,
+    )
+
+    samples = (work / "java-legacy-composed.tdf", work / "rust-spec-composed.tdf")
+    for sample in samples:
+        profile = archives[sample]
+        manifest, payload = read_archive(sample, profile)
+        changed = bytearray(payload)
+        changed[-17] ^= 1
+        corrupt = write_archive(
+            work / f"{sample.stem}-last-segment.tdf",
+            manifest,
+            bytes(changed),
+            manifest_name=profile,
+        )
+        manifest["assertions"] = [
+            a for a in manifest["assertions"] if a["id"] != "publisher"
+        ]
+        missing = write_archive(
+            work / f"{sample.stem}-missing-assertion.tdf",
+            manifest,
+            payload,
+            manifest_name=profile,
+        )
+        before = set(work.iterdir())
+        for reader in ("rust", "python"):
+            output = work / f"{reader}-{sample.stem}-rejected.bin"
+            for client_id in (SHARED_ID, DENIED_ID):
+                invoke(
+                    reader,
+                    commands[reader],
+                    "open-composed-p256",
+                    sample,
+                    output,
+                    public,
+                    metadata,
+                    unchanged=None,
+                    expected_error="PermissionDenied"
+                    if reader == "rust"
+                    else "KAS denied access",
+                    OTDF_CLIENT_ID=client_id,
+                    **auth,
+                )
+            for invalid in (corrupt, missing):
+                invoke(
+                    reader,
+                    commands[reader],
+                    "open-composed-p256",
+                    invalid,
+                    output,
+                    public,
+                    metadata,
+                    unchanged=None,
+                    expected_error="Invalid" if reader == "rust" else "TDF error:",
+                    **auth,
+                )
+        if set(work.iterdir()) != before:
+            raise ValueError("A composed rejection left output files")
+    print(
+        "Composed KAS denial, required assertions, and late-segment cleanup passed",
         flush=True,
     )
 
@@ -714,6 +846,11 @@ def main() -> None:
             "exec:java",
         ]
         if os.environ.get("OTDF_TEST_KAS_EC_KEY_ID"):
+            all_of = os.environ.get("OTDF_TEST_ALL_OF_ATTRIBUTES")
+            if all_of and os.environ.get("OTDF_TEST_ISSUER"):
+                composed_round_trips(
+                    work, commands, source, original, all_of.splitlines()
+                )
             p256_round_trips(work, commands, source, original)
             if os.environ.get("OTDF_TEST_ISSUER"):
                 connection_round_trips(work, commands, source, original)

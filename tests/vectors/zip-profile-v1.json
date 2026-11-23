@@ -610,6 +610,742 @@
           "label": "test"
         }
       }
+    },
+    {
+      "id": "ZIP-MULTI-DISK-FOOTER",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 4,
+          "bytes": [1, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-DISK-ENTRY-COUNT-MISMATCH",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 8,
+          "bytes": [1, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-OVERSTATED-ENTRY-COUNT",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 10,
+          "bytes": [3, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-OVERSIZED-DECLARED-DIRECTORY",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 12,
+          "bytes": [1, 16, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-DIRECTORY-OFFSET-PAST-EOF",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 16,
+          "bytes": [254, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-STORED-SIZE-DISAGREEMENT",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "central",
+          "offset": 20,
+          "bytes": [1, 0, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-ENTRY-OFFSET-PAST-EOF",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "central-last",
+          "offset": 42,
+          "bytes": [254, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-CENTRAL-EXTRA-OVERRUN",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "central-last",
+          "offset": 30,
+          "bytes": [255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-CENTRAL-COMMENT-OVERRUN",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "central-last",
+          "offset": 32,
+          "bytes": [255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-OVERSIZED-DECLARED-MANIFEST",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "central-last",
+          "offset": 20,
+          "bytes": [1, 0, 64, 0]
+        },
+        {
+          "record": "central-last",
+          "offset": 24,
+          "bytes": [1, 0, 64, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-LOCAL-COMPRESSION-DISAGREEMENT",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "local",
+          "offset": 8,
+          "bytes": [8, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-LOCAL-ENCRYPTION-DISAGREEMENT",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "local",
+          "offset": 6,
+          "bytes": [1]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-LOCAL-DESCRIPTOR-DISAGREEMENT",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "local",
+          "offset": 6,
+          "bytes": [8]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-MANIFEST-CRC-MISMATCH",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "local-last",
+          "offset": 14,
+          "bytes": [0, 0, 0, 0]
+        },
+        {
+          "record": "central-last",
+          "offset": 16,
+          "bytes": [0, 0, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP-PAYLOAD-CRC-MISMATCH",
+      "expect": "reject-after-key",
+      "zip_patches": [
+        {
+          "record": "local",
+          "offset": 14,
+          "bytes": [0, 0, 0, 0]
+        },
+        {
+          "record": "central",
+          "offset": 16,
+          "bytes": [0, 0, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-FOOTER-WITHOUT-SENTINEL",
+      "expect": "accept",
+      "zip64": true
+    },
+    {
+      "id": "ZIP64-INDEPENDENT-ENTRY-COUNT-SENTINELS",
+      "expect": "accept",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 8,
+          "bytes": [255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-ALL-FOOTER-SENTINELS",
+      "expect": "accept",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 8,
+          "bytes": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-INDEPENDENT-DIRECTORY-SIZE-SENTINEL",
+      "expect": "accept",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 12,
+          "bytes": [255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-INDEPENDENT-DIRECTORY-OFFSET-SENTINEL",
+      "expect": "accept",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 16,
+          "bytes": [255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-SENTINEL-WITHOUT-FOOTER",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 12,
+          "bytes": [255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-ENTRY-OFFSET-WITHOUT-EXTRA",
+      "expect": "reject-structural",
+      "zip_patches": [
+        {
+          "record": "central-last",
+          "offset": 42,
+          "bytes": [255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-SIZE-DISAGREES-WITH-ZIP32",
+      "expect": "reject-structural",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 12,
+          "bytes": [1, 0, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-OFFSET-DISAGREES-WITH-ZIP32",
+      "expect": "reject-structural",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 16,
+          "bytes": [1, 0, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-IMPOSSIBLE-ENTRY-COUNT",
+      "expect": "reject-structural",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "zip64-record",
+          "offset": 32,
+          "bytes": [255, 255, 255, 255, 255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-DIRECTORY-OFFSET-OVERFLOW",
+      "expect": "reject-structural",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "footer",
+          "offset": 16,
+          "bytes": [255, 255, 255, 255]
+        },
+        {
+          "record": "zip64-record",
+          "offset": 48,
+          "bytes": [255, 255, 255, 255, 255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-LOCATOR-OFFSET-PAST-EOF",
+      "expect": "reject-structural",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "zip64-locator",
+          "offset": 8,
+          "bytes": [0, 16, 0, 0, 0, 0, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-LOCATOR-OFFSET-OVERFLOW",
+      "expect": "reject-structural",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "zip64-locator",
+          "offset": 8,
+          "bytes": [255, 255, 255, 255, 255, 255, 255, 255]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-LOCATOR-MULTIPLE-DISKS",
+      "expect": "reject-structural",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "zip64-locator",
+          "offset": 16,
+          "bytes": [2, 0, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "ZIP64-RECORD-SIZE-DISAGREEMENT",
+      "expect": "reject-structural",
+      "zip64": true,
+      "zip_patches": [
+        {
+          "record": "zip64-record",
+          "offset": 4,
+          "bytes": [43, 0, 0, 0, 0, 0, 0, 0]
+        }
+      ]
+    },
+    {
+      "id": "PAYLOAD-REMOTE-PROTOCOL",
+      "expect": "reject-structural",
+      "set": {
+        "/payload/protocol": "https"
+      }
+    },
+    {
+      "id": "PAYLOAD-INLINE-TYPE",
+      "expect": "reject-structural",
+      "set": {
+        "/payload/type": "inline"
+      }
+    },
+    {
+      "id": "SPEC-HIDDEN-PAYLOAD-REFERENCE",
+      "expect": "reject-structural",
+      "profiles": [
+        "spec"
+      ],
+      "archive": "renamed",
+      "set": {
+        "/payload/url": ".payload"
+      }
+    },
+    {
+      "id": "SPEC-SELF-REFERENTIAL-PAYLOAD",
+      "expect": "reject-structural",
+      "profiles": [
+        "spec"
+      ],
+      "set": {
+        "/payload/url": "manifest.json"
+      }
+    },
+    {
+      "id": "METHOD-ARCHIVE-LEVEL-IV",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/method/iv": "AAAAAAAAAAAAAAAA"
+      }
+    },
+    {
+      "id": "GRANT-EMPTY-KID",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/kid": ""
+      }
+    },
+    {
+      "id": "GRANT-UNSUPPORTED-WRAP-TYPE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/type": "remote"
+      }
+    },
+    {
+      "id": "GRANT-NON-KAS-PROTOCOL",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/protocol": "https"
+      }
+    },
+    {
+      "id": "GRANT-DIFFERENT-SCHEMA-VERSION",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/schemaVersion": "2.0"
+      }
+    },
+    {
+      "id": "GRANT-INDEPENDENT-SPLIT-ID",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/sid": "new-split"
+      }
+    },
+    {
+      "id": "JAVA-BINDING-UPPERCASE-HEX",
+      "expect": "reject-structural",
+      "profiles": [
+        "java"
+      ],
+      "set": {
+        "/encryptionInformation/keyAccess/0/policyBinding/hash": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQ=="
+      }
+    },
+    {
+      "id": "POLICY-INVALID-UUID",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiaW52YWxpZCIsImJvZHkiOnsiZGF0YUF0dHJpYnV0ZXMiOlt7ImF0dHJpYnV0ZSI6Imh0dHBzOi8vZXhhbXBsZS5pbnZhbGlkL2F0dHIvZXhhbXBsZS92YWx1ZS9sb2NhbCJ9XSwiZGlzc2VtIjpbXX19"
+      }
+    },
+    {
+      "id": "POLICY-UNSUPPORTED-DISSEM",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsIn1dLCJkaXNzZW0iOlsidXJuOmV4YW1wbGU6cmVjaXBpZW50Il19fQ=="
+      }
+    },
+    {
+      "id": "POLICY-DUPLICATE-ATTRIBUTE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsIn0seyJhdHRyaWJ1dGUiOiJodHRwczovL2V4YW1wbGUuaW52YWxpZC9hdHRyL2V4YW1wbGUvdmFsdWUvbG9jYWwifV0sImRpc3NlbSI6W119fQ=="
+      }
+    },
+    {
+      "id": "POLICY-PLAINTEXT-ATTRIBUTE-URL",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cDovL2V4YW1wbGUuaW52YWxpZC9hdHRyL2V4YW1wbGUvdmFsdWUvbG9jYWwifV0sImRpc3NlbSI6W119fQ=="
+      }
+    },
+    {
+      "id": "POLICY-ATTRIBUTE-WITH-QUERY",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsP2tleT12YWx1ZSJ9XSwiZGlzc2VtIjpbXX19"
+      }
+    },
+    {
+      "id": "POLICY-ATTRIBUTE-WITH-FRAGMENT",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsI3ZhbHVlIn1dLCJkaXNzZW0iOltdfX0="
+      }
+    },
+    {
+      "id": "POLICY-ATTRIBUTE-WITH-USERINFO",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9uYW1lQGV4YW1wbGUuaW52YWxpZC9hdHRyL2V4YW1wbGUvdmFsdWUvbG9jYWwifV0sImRpc3NlbSI6W119fQ=="
+      }
+    },
+    {
+      "id": "POLICY-UNSUPPORTED-ATTRIBUTE-DISPLAY",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsIiwiZGlzcGxheU5hbWUiOiJMYWJlbCJ9XSwiZGlzc2VtIjpbXX19"
+      }
+    },
+    {
+      "id": "POLICY-UNSUPPORTED-DEFAULT-ATTRIBUTE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsIiwiaXNEZWZhdWx0Ijp0cnVlfV0sImRpc3NlbSI6W119fQ=="
+      }
+    },
+    {
+      "id": "INTEGRITY-DEFAULT-ABOVE-LIMIT",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segmentSizeDefault": 67108865
+      }
+    },
+    {
+      "id": "INTEGRITY-WRONG-ENCRYPTED-DEFAULT",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/encryptedSegmentSizeDefault": 43
+      }
+    },
+    {
+      "id": "INTEGRITY-SHORT-NONFINAL-SEGMENT",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segments/0/segmentSize": 15,
+        "/encryptionInformation/integrityInformation/segments/0/encryptedSegmentSize": 43
+      }
+    },
+    {
+      "id": "INTEGRITY-OVERSIZED-FINAL-SEGMENT",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segments/1/segmentSize": 17,
+        "/encryptionInformation/integrityInformation/segments/1/encryptedSegmentSize": 45
+      }
+    },
+    {
+      "id": "INTEGRITY-NEGATIVE-SEGMENT-LENGTH",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segments/0/segmentSize": -1
+      }
+    },
+    {
+      "id": "INTEGRITY-BOOLEAN-SEGMENT-LENGTH",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/segments/0/segmentSize": true
+      }
+    },
+    {
+      "id": "INTEGRITY-ROOT-WRONG-SIGNATURE-SIZE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/integrityInformation/rootSignature/sig": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+      }
+    },
+    {
+      "id": "INTEGRITY-REORDERED-SEGMENT-TAGS",
+      "expect": "reject-after-key",
+      "set": {
+        "/encryptionInformation/integrityInformation/segments/0/hash": "uJs/Rgo1OkohoTWnqx+Dxw==",
+        "/encryptionInformation/integrityInformation/segments/1/hash": "qOVXd4EvorQomx8Ub9R9nQ=="
+      }
+    },
+    {
+      "id": "METADATA-VALID-UNICODE",
+      "expect": "accept",
+      "metadata": "release: café 🔒",
+      "set": {
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJjaXBoZXJ0ZXh0IjoiZ0FBQUFBQUFBQUFBQUFBQkxjZ3V5emZTZlVqUzgva0xnVTVTUDBnMmJDWTlybzJ3QW9GQlZOZ3hrWVg2d1JnPSIsIml2IjoiZ0FBQUFBQUFBQUFBQUFBQiJ9"
+      }
+    },
+    {
+      "id": "METADATA-INVALID-BASE64",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "!"
+      }
+    },
+    {
+      "id": "METADATA-MISSING-CIPHERTEXT",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJpdiI6ICJnQUFBQUFBQUFBQUFBQUFCIn0="
+      }
+    },
+    {
+      "id": "METADATA-NONMATCHING-IV",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJjaXBoZXJ0ZXh0IjoiZ0FBQUFBQUFBQUFBQUFBQkxjZ3V5emZTZlVqUzgva0xnVTVTUDBnMmJDWTlybzJ3QW9GQlZOZ3hrWVg2d1JnPSIsIml2IjoiQUFBQUFBQUFBQUFBQUFBQSJ9"
+      }
+    },
+    {
+      "id": "METADATA-TOO-SHORT-FRAME",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJjaXBoZXJ0ZXh0IjoiZ0FBQUFBQUFBQUFBQUFBQkxjZ3V5emZTZlVqUzgva0xnVTVTIiwiaXYiOiJnQUFBQUFBQUFBQUFBQUFCIn0="
+      }
+    },
+    {
+      "id": "METADATA-TAMPERED-TAG",
+      "expect": "reject-after-key",
+      "set": {
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJjaXBoZXJ0ZXh0IjoiZ0FBQUFBQUFBQUFBQUFBQkxjZ3V5emZTZlVqUzgva0xnVTVTUDBnMmJDWTlybzJ3QW9GQlZOZ3hrWVg2d1JrPSIsIml2IjoiZ0FBQUFBQUFBQUFBQUFBQiJ9"
+      }
+    },
+    {
+      "id": "METADATA-AUTHENTICATED-NONUTF8",
+      "expect": "reject-after-key",
+      "set": {
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJjaXBoZXJ0ZXh0IjoiZ0FBQUFBQUFBQUFBQUFBQm9Fdm5sQ2pjTlhHSWludTNaYmlZVGxJPSIsIml2IjoiZ0FBQUFBQUFBQUFBQUFBQiJ9"
+      }
+    },
+    {
+      "id": "METADATA-PAYLOAD-NONCE-REUSE",
+      "expect": "reject-after-key",
+      "set": {
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJjaXBoZXJ0ZXh0IjoiQUFBQUFBQUFBQUFBQUFBQkZZTDd1bW1YWDNCb1FTTlVqY2haa3FqbFYzZUJMNkswS0pzZkZHL1VmWjA9IiwiaXYiOiJBQUFBQUFBQUFBQUFBQUFCIn0="
+      }
+    },
+    {
+      "id": "ASSERTION-EMPTY-ID",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/id": ""
+      }
+    },
+    {
+      "id": "ASSERTION-UNSUPPORTED-SCOPE",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/scope": "arbitrary"
+      }
+    },
+    {
+      "id": "ASSERTION-UNSUPPORTED-STATE",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/appliesToState": "unknown"
+      }
+    },
+    {
+      "id": "ASSERTION-NULL-LIST",
+      "expect": "reject-structural",
+      "set": {
+        "/assertions": null
+      }
+    },
+    {
+      "id": "ASSERTION-MISSING-STATEMENT",
+      "expect": "reject-structural",
+      "assertions": [
+        "hs"
+      ],
+      "remove": [
+        "/assertions/0/statement"
+      ],
+      "set": {}
+    },
+    {
+      "id": "ASSERTION-UNSIGNED-ALGORITHM",
+      "expect": "reject-after-key",
+      "assertions": [
+        "hs"
+      ],
+      "set": {
+        "/assertions/0/binding/signature": "eyJhbGciOiJub25lIn0.eyJhc3NlcnRpb25IYXNoIjoiNWI4NjNiYjQ1NmIwYmE3YjQ0ZDI3YmEyNmY5ZTlhMjczNjcwMjY2NWExMjhiMTYwNzk0NWNmYTZhYmY0YzMxNyIsImFzc2VydGlvblNpZyI6InFPVlhkNEV2b3JRb214OFViOVI5bmJpYlAwWUtOVHBLSWFFMXA2c2ZnOGRiaGp1MFZyQzZlMFRTZTZKdm5wb25ObkFtWmFFb3NXQjVSYyttcS9UREZ3PT0ifQ."
+      }
+    },
+    {
+      "id": "JAVA-COMBINED-KNOWN-ANSWER",
+      "expect": "accept",
+      "profiles": [
+        "java"
+      ],
+      "metadata": "release: café 🔒",
+      "assertions": [
+        "hs",
+        "rs"
+      ],
+      "required_assertions": [
+        "tdf-binding",
+        "publisher"
+      ],
+      "assertion_keys": {
+        "publisher": "publisher"
+      },
+      "set": {
+        "/encryptionInformation/keyAccess/0/type": "ec-wrapped",
+        "/encryptionInformation/keyAccess/0/kid": "fixture-p256",
+        "/encryptionInformation/keyAccess/0/wrappedKey": "AAAAAAAAAAAAAAAAPV901TwytGMyjMMH5RkdF6sIfDM0TQREfo7jmge7Z0igQVySkYYeMVbkkP0Y0NBj",
+        "/encryptionInformation/keyAccess/0/ephemeralPublicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ3\n8hs1pgtI/EdmmXgHd1UQ247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==\n-----END PUBLIC KEY-----\n",
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsIn0seyJhdHRyaWJ1dGUiOiJodHRwczovL2V4YW1wbGUuaW52YWxpZC9hdHRyL290aGVyL3ZhbHVlL2ZpeHR1cmUifV0sImRpc3NlbSI6W119fQ==",
+        "/encryptionInformation/keyAccess/0/policyBinding/hash": "ZDQxM2U4ZjYwYzA2NzZiN2EyNzljNGIzMGExN2ZkMjU4N2VhM2U3MjdiMDA3MmQ1MjczYWQ2ZTAxOWNhMTljMw==",
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJjaXBoZXJ0ZXh0IjoiZ0FBQUFBQUFBQUFBQUFBQkxjZ3V5emZTZlVqUzgva0xnVTVTUDBnMmJDWTlybzJ3QW9GQlZOZ3hrWVg2d1JnPSIsIml2IjoiZ0FBQUFBQUFBQUFBQUFBQiJ9"
+      }
+    },
+    {
+      "id": "SPEC-COMBINED-KNOWN-ANSWER",
+      "expect": "accept",
+      "profiles": [
+        "spec"
+      ],
+      "metadata": "release: café 🔒",
+      "assertions": [
+        "hs",
+        "rs"
+      ],
+      "required_assertions": [
+        "tdf-binding",
+        "publisher"
+      ],
+      "assertion_keys": {
+        "publisher": "publisher"
+      },
+      "set": {
+        "/encryptionInformation/keyAccess/0/type": "ec-wrapped",
+        "/encryptionInformation/keyAccess/0/kid": "fixture-p256",
+        "/encryptionInformation/keyAccess/0/wrappedKey": "AAAAAAAAAAAAAAAAPV901TwytGMyjMMH5RkdF6sIfDM0TQREfo7jmge7Z0igQVySkYYeMVbkkP0Y0NBj",
+        "/encryptionInformation/keyAccess/0/ephemeralPublicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ3\n8hs1pgtI/EdmmXgHd1UQ247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==\n-----END PUBLIC KEY-----\n",
+        "/encryptionInformation/policy": "eyJ1dWlkIjoiMzI0OGNiNGQtNTIyMy00MjQyLTgyNmEtM2I2MmYxY2VhYTEwIiwiYm9keSI6eyJkYXRhQXR0cmlidXRlcyI6W3siYXR0cmlidXRlIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvYXR0ci9leGFtcGxlL3ZhbHVlL2xvY2FsIn0seyJhdHRyaWJ1dGUiOiJodHRwczovL2V4YW1wbGUuaW52YWxpZC9hdHRyL290aGVyL3ZhbHVlL2ZpeHR1cmUifV0sImRpc3NlbSI6W119fQ==",
+        "/encryptionInformation/keyAccess/0/policyBinding/hash": "1BPo9gwGdreiecSzChf9JYfqPnJ7AHLVJzrW4BnKGcM=",
+        "/encryptionInformation/keyAccess/0/encryptedMetadata": "eyJjaXBoZXJ0ZXh0IjoiZ0FBQUFBQUFBQUFBQUFBQkxjZ3V5emZTZlVqUzgva0xnVTVTUDBnMmJDWTlybzJ3QW9GQlZOZ3hrWVg2d1JnPSIsIml2IjoiZ0FBQUFBQUFBQUFBQUFBQiJ9"
+      }
     }
   ],
   "known_assertions": {

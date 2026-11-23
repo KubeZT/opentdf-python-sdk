@@ -17,15 +17,24 @@ pinned releases as readers and writers.
 
 | Area | Rust and Python coverage | Reference cases and gaps |
 | --- | --- | --- |
-| ZIP layout and manifest | Both manifest profiles, version locations, safe payload names, duplicate fields, local and central headers, bounds, truncated ZIP, and ZIP64 | Java `ZipReaderTest` and `ZipWriterTest`. Go `internal/zipstream` and `tdf_spec_version_test.go`. Upstream `test_zip_conformance.py`. Run the upstream malformed ZIP cases from the pinned checkout and add manifest-schema validation. |
+| ZIP layout and manifest | Both manifest layouts, duplicate fields, contradictory headers, directory bounds, ZIP64 sentinels, and rejection of every shorter prefix of each known-answer archive before key release | Java `ZipReaderTest` and `ZipWriterTest`. Go `internal/zipstream` and `tdf_spec_version_test.go`. Upstream `test_zip_conformance.py`. The shared corpus covers local equivalents of several upstream mutations. Run the remaining upstream cases directly and add manifest-schema validation. |
 | Encryption and payload integrity | Fixed AES-256-GCM ciphertext, segment sizes and tags, root HMAC, late tamper rejection, and exact byte recovery | Java `AesGcmTest` and `TDFRootSignatureTest`. Go `tdf_test.go`, `fuzz_test.go`, and `tdf_segment_defaults_test.go`. Add upstream legacy hash modes when supported. |
-| Streaming and resource limits | Bounded memory, multi-segment I/O, ZIP64, failure cleanup, and opt-in 8 GiB and 256 GiB cross-SDK files | Go `tdf_readat_test.go`, `chunked_test.go`, and ZIP fuzzers. Upstream `test_zip64.py` and range fixtures. Random access and HTTP ranges are gaps. |
+| Streaming and resource limits | Bounded memory, every adaptive segment width through 2 TiB, output cleanup on late failure, and opt-in 8 GiB and 256 GiB cross-SDK files | Go `tdf_readat_test.go`, `chunked_test.go`, and ZIP fuzzers. Upstream `test_zip64.py` and range fixtures. Random access and HTTP ranges are gaps. |
 | Policy and authorization | Single grant, policy binding for both profiles, multiple attributes, shared KAS, all-of access, invalid credentials, denial, and local routing with producer offline | Java `PlannerTest` and `AutoconfigureTest`. Go `granter_test.go`, `key_splitter_test.go`, and experimental split tests. Upstream `test_abac.py`. Add AnyOf, Hierarchy, multi-grant split, and obligation cases as support lands. |
 | Encrypted metadata | UTF-8 metadata, peer round trips, malformed framing, tag failures, and nonce reuse rejection | Go `key_access_test.go` and `tdf_test.go`; Java `TDFTest`. Extend coverage with upstream golden containers and metadata across key splits. |
 | Signed assertions | HS256 and caller-pinned RS256, string statements, independent JWS vectors, required IDs, key mismatch, tampering and payload replay | Java `TDFTest`. Go `assertion_test.go` and `null_statement_test.go`. Upstream `test_tdf_assertions.py`. Add the upstream object-valued statement fixtures if the SDKs support that wire form. |
-| KAS keys and transport | RSA-2048 and P-256 wrapping and rewrap sessions, valid and malformed P-256 grants, explicit origin, and live KAS authorization | Java `KeyTypeTest`, `ECKeyPairTest`, `KASClientTest`, and optional PQC/FIPS test modules. Go `key_access_test.go`, `tdf_hybrid_test.go`, and `kas_client_test.go`. Other curves, PQC, and FIPS need separate coverage. |
-| Discovery and token lifecycle | Configured platform discovery, OIDC client credentials, token expiry, explicit routes, and caller bearer tokens | Java `DiscoveryTest`, `TokenSourceTest`, and `DPoPRetryInterceptorTest`. Go `discovery_test.go` and `auth` tests. Interactive authorization, token exchange, and DPoP need separate coverage. |
+| KAS keys and transport | RSA-2048 and P-256 wrapping and rewrap sessions, malformed grants, explicit origin, and loopback HTTP checks for redirects, truncation, and the response size limit | Java `KeyTypeTest`, `ECKeyPairTest`, `KASClientTest`, and optional PQC/FIPS test modules. Go `key_access_test.go`, `tdf_hybrid_test.go`, and `kas_client_test.go`. Other curves, PQC, and FIPS need separate coverage. |
+| Discovery and token lifecycle | Configured platform discovery, OIDC client credentials, token expiry and failed-refresh retry, explicit routes, and caller bearer tokens | Java `DiscoveryTest`, `TokenSourceTest`, and `DPoPRetryInterceptorTest`. Go `discovery_test.go` and `auth` tests. Interactive authorization, token exchange, and DPoP need separate coverage. |
 | Legacy, advanced formats, and workflow APIs | Two ZIP profiles | Upstream `test_legacy.py`, `test_pqc.py`, and `test_audit_logs_integration.py`. Go experimental TDF and split suites. Legacy versions, bulk APIs, and platform workflows are outside the current ZIP corpus. |
+
+## Upstream golden archives
+
+The Java 0.19.1 golden uses the ZIP layout and cryptographic encodings
+expected for a single RSA grant. Its empty policy is rejected by both
+readers before KAS. The archive is usable for independent cryptographic
+checks. A positive end-to-end golden also needs a supported policy and
+its original test key in the local KAS.
+[Pinned upstream golden](https://github.com/opentdf/tests/blob/da2d90258682ef74944a7f61ad1f9d8cc709023c/xtest/golden/xstext-java-v0.19.1-8e6f8bc-GW2.79.0.tdf)
 
 Keep generated fixtures local. For any upstream fixture brought into either
 checkout, record its source, revision, license, and checksum.

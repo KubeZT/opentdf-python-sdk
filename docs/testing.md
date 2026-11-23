@@ -14,6 +14,16 @@ Run `make test-conformance` for the shared offline corpus. See the
 | [Go SDK](https://github.com/opentdf/platform/releases/tag/sdk%2Fv0.35.0) | `v0.35.0` (`b048476`) |
 | [OpenTDF Platform](https://github.com/opentdf/platform/releases/tag/service/v0.31.0) | `service/v0.31.0` (`45a10ad`) |
 
+## Test layers
+
+| Command | What it exercises |
+| --- | --- |
+| `make check` | Native unit and integration tests, including loopback HTTP, crypto, and filesystem failures. |
+| `make test-conformance` | Shared known answers and malformed input, including output and KAS-call checks. |
+| `make test-e2e` | Downstream SDK consumers, Java and Go interoperability, combined features, a local KAS, and bounded file streaming. |
+| `make test-federation` | Two independent sites, wrong wrapping keys, and authorized reads after the producer goes offline. |
+| `make test-large` | Peak RSS, late failures, and opt-in ZIP64 and 256 GiB round trips. |
+
 ## ZIP profiles
 
 | Writer profile | ZIP manifest | Version field | HS256 policy-binding digest before Base64 |

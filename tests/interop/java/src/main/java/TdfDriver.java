@@ -22,10 +22,13 @@ import java.util.Set;
 public final class TdfDriver {
     public static void main(String[] args) throws Exception {
         String operation = args.length == 0 ? "" : args[0];
+        boolean composed = operation.endsWith("composed-p256");
         boolean validArgs = switch (operation) {
             case "create", "open", "create-p256", "open-p256", "expect-denied" -> args.length == 3;
             case "create-features" -> args.length >= 5;
             case "open-features", "create-assertions", "open-assertions" -> args.length == 4;
+            case "create-composed-p256" -> args.length >= 6;
+            case "open-composed-p256" -> args.length == 5;
             default -> false;
         };
         if (!validArgs) {
@@ -37,6 +40,8 @@ public final class TdfDriver {
                       open-features INPUT OUTPUT EXPECTED_METADATA_FILE
                       create-assertions INPUT OUTPUT PRIVATE_PEM
                       open-assertions INPUT OUTPUT PUBLIC_PEM
+                      create-composed-p256 INPUT OUTPUT PRIVATE_PEM METADATA_FILE ATTRIBUTE [ATTRIBUTE ...]
+                      open-composed-p256 INPUT OUTPUT PUBLIC_PEM EXPECTED_METADATA_FILE
                     """);
         }
 
@@ -58,11 +63,13 @@ public final class TdfDriver {
         }
 
         try (SDK sdk = builder.build()) {
-            KeyType sessionKey = operation.equals("open-p256") ? KeyType.EC256Key : KeyType.RSA2048Key;
+            KeyType sessionKey = operation.equals("open-p256") || composed
+                    ? KeyType.EC256Key : KeyType.RSA2048Key;
             var readConfig = Config.newTDFReaderConfig(
                     Config.WithKasAllowlist(kas.toString()),
                     Config.WithSessionKeyType(sessionKey));
-            if (operation.equals("open-assertions")) {
+            boolean verifyAssertions = operation.equals("open-assertions") || operation.equals("open-composed-p256");
+            if (verifyAssertions) {
                 var key = KeyFactory.getInstance("RSA").generatePublic(
                         new X509EncodedKeySpec(readPem(Path.of(args[3]), "PUBLIC KEY")));
                 var keys = new Config.AssertionVerificationKeys();
@@ -79,15 +86,16 @@ public final class TdfDriver {
             try {
                 try (var stream = Files.newOutputStream(temp)) {
                     if (operation.startsWith("create")) {
-                        boolean withFeatures = operation.equals("create-features");
+                        boolean withFeatures = operation.equals("create-features") || composed;
+                        int metadataIndex = composed ? 4 : 3;
                         String[] attributes = withFeatures
-                                ? Arrays.copyOfRange(args, 4, args.length)
+                                ? Arrays.copyOfRange(args, metadataIndex + 1, args.length)
                                 : new String[]{required("OTDF_ATTRIBUTE")};
-                        String metadata = withFeatures ? Files.readString(Path.of(args[3])) : "";
+                        String metadata = withFeatures ? Files.readString(Path.of(args[metadataIndex])) : "";
                         var kasInfo = new Config.KASInfo();
                         kasInfo.URL = kas.toString();
                         KeyType wrappingKey = KeyType.RSA2048Key;
-                        if (operation.equals("create-p256")) {
+                        if (operation.equals("create-p256") || composed) {
                             wrappingKey = KeyType.EC256Key;
                             kasInfo.Algorithm = wrappingKey.toString();
                             kasInfo.KID = required("OTDF_TEST_KAS_EC_KEY_ID");
@@ -101,7 +109,7 @@ public final class TdfDriver {
                                 Config.withKasInformation(kasInfo),
                                 Config.withDataAttributes(attributes),
                                 Config.withMetaData(metadata));
-                        if (operation.equals("create-assertions")) {
+                        if (operation.equals("create-assertions") || composed) {
                             var key = KeyFactory.getInstance("RSA").generatePrivate(
                                     new PKCS8EncodedKeySpec(readPem(Path.of(args[3]), "PRIVATE KEY")));
                             var binding = assertion("tdf-binding", AssertionConfig.Type.HandlingAssertion,
@@ -118,11 +126,11 @@ public final class TdfDriver {
                     } else {
                         try (var channel = FileChannel.open(input)) {
                             var reader = sdk.loadTDF(channel, readConfig);
-                            if (operation.equals("open-features")
-                                    && !Files.readString(Path.of(args[3])).equals(reader.getMetadata())) {
+                            if ((operation.equals("open-features") || composed)
+                                    && !Files.readString(Path.of(args[composed ? 4 : 3])).equals(reader.getMetadata())) {
                                 throw new IllegalStateException("Decrypted metadata differs");
                             }
-                            if (operation.equals("open-assertions")) {
+                            if (verifyAssertions) {
                                 var assertions = reader.getManifest().assertions;
                                 if (assertions == null || assertions.size() != 2
                                         || !Set.of(assertions.get(0).id, assertions.get(1).id)

@@ -23,7 +23,9 @@ func run(args []string) error {
   go-driver create-features INPUT OUTPUT METADATA_FILE ATTRIBUTE [ATTRIBUTE ...]
   go-driver open-features INPUT OUTPUT EXPECTED_METADATA_FILE
   go-driver create-assertions INPUT OUTPUT PRIVATE_PEM
-  go-driver open-assertions INPUT OUTPUT PUBLIC_PEM`)
+  go-driver open-assertions INPUT OUTPUT PUBLIC_PEM
+  go-driver create-composed-p256 INPUT OUTPUT PRIVATE_PEM METADATA_FILE ATTRIBUTE [ATTRIBUTE ...]
+  go-driver open-composed-p256 INPUT OUTPUT PUBLIC_PEM EXPECTED_METADATA_FILE`)
 	}
 
 	platform, err := endpoint("OTDF_PLATFORM_URL")
@@ -88,18 +90,27 @@ func validArgs(args []string) bool {
 		return len(args) >= 5
 	case "open-features", "create-assertions", "open-assertions":
 		return len(args) == 4
+	case "create-composed-p256":
+		return len(args) >= 6
+	case "open-composed-p256":
+		return len(args) == 5
 	default:
 		return false
 	}
 }
 
 func create(client *sdk.SDK, input, output *os.File, kas string, args []string) error {
+	composed := args[0] == "create-composed-p256"
 	var attributes []string
 	var metadata []byte
-	if args[0] == "create-features" {
-		attributes = args[4:]
+	if args[0] == "create-features" || composed {
+		index := 3
+		if composed {
+			index = 4
+		}
+		attributes = args[index+1:]
 		var err error
-		metadata, err = os.ReadFile(args[3])
+		metadata, err = os.ReadFile(args[index])
 		if err != nil {
 			return err
 		}
@@ -115,7 +126,7 @@ func create(client *sdk.SDK, input, output *os.File, kas string, args []string) 
 	}
 
 	info := sdk.KASInfo{URL: kas, KID: os.Getenv("OTDF_KAS_KEY_ID"), Algorithm: "rsa:2048"}
-	if args[0] == "create-p256" {
+	if args[0] == "create-p256" || composed {
 		info.Algorithm = "ec:secp256r1"
 		info.KID = os.Getenv("OTDF_TEST_KAS_EC_KEY_ID")
 		if info.KID == "" {
@@ -129,7 +140,7 @@ func create(client *sdk.SDK, input, output *os.File, kas string, args []string) 
 		sdk.WithMetaData(string(metadata)),
 		sdk.WithTargetMode("4.3.0"),
 	}
-	if args[0] == "create-assertions" {
+	if args[0] == "create-assertions" || composed {
 		der, err := readPEM(args[3], "PRIVATE KEY")
 		if err != nil {
 			return err
@@ -152,11 +163,13 @@ func create(client *sdk.SDK, input, output *os.File, kas string, args []string) 
 }
 
 func open(client *sdk.SDK, input, output *os.File, kas string, args []string) error {
+	composed := args[0] == "open-composed-p256"
+	withAssertions := args[0] == "open-assertions" || composed
 	options := []sdk.TDFReaderOption{sdk.WithKasAllowlist([]string{kas})}
-	if args[0] == "open-p256" {
+	if args[0] == "open-p256" || composed {
 		options = append(options, sdk.WithSessionKeyType("ec:secp256r1"))
 	}
-	if args[0] == "open-assertions" {
+	if withAssertions {
 		der, err := readPEM(args[3], "PUBLIC KEY")
 		if err != nil {
 			return err
@@ -179,8 +192,12 @@ func open(client *sdk.SDK, input, output *os.File, kas string, args []string) er
 	if err != nil {
 		return err
 	}
-	if args[0] == "open-features" {
-		expected, err := os.ReadFile(args[3])
+	if args[0] == "open-features" || composed {
+		index := 3
+		if composed {
+			index = 4
+		}
+		expected, err := os.ReadFile(args[index])
 		if err != nil {
 			return err
 		}
@@ -192,7 +209,7 @@ func open(client *sdk.SDK, input, output *os.File, kas string, args []string) er
 			return fmt.Errorf("decrypted metadata differs")
 		}
 	}
-	if args[0] == "open-assertions" {
+	if withAssertions {
 		assertions := tdf.Manifest().Assertions
 		if len(assertions) != 2 {
 			return fmt.Errorf("expected exactly two assertions")

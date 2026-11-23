@@ -1,13 +1,14 @@
 import base64
 import copy
 import json
+import struct
 from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
 
 import pytest
 
-from opentdf_sdk import TdfError, open_tdf
+from opentdf_sdk import TdfError, open_tdf, open_tdf_with_metadata
 from opentdf_sdk._kas import Kas
 
 _CORPUS = json.loads(
@@ -22,6 +23,37 @@ def _target(manifest: dict[str, Any], pointer: str) -> tuple[Any, str]:
     for part in parents:
         current = current[int(part) if isinstance(current, list) else part]
     return current, field
+
+
+def _patch_zip(data: bytearray, case: dict[str, Any]) -> None:
+    # Record offsets follow ZIP APPNOTE sections 4.3.7 and 4.3.12–4.3.16.
+    footer = len(data) - 22
+    cd_size, central = struct.unpack_from("<II", data, footer + 12)
+    central_last = central + 46 + sum(struct.unpack_from("<3H", data, central + 28))
+    (local_last,) = struct.unpack_from("<I", data, central_last + 42)
+    if case.get("zip64"):
+        zip32 = data[footer:]
+        data[footer:] = struct.pack(
+            "<4sQHHIIQQQQ", b"PK\x06\x06", 44, 45, 45, 0, 0, 2, 2, cd_size, central
+        )
+        data.extend(struct.pack("<4sIQI", b"PK\x06\x07", 0, footer, 1))
+        footer = len(data)
+        data.extend(zip32)
+
+    records = {
+        "local": 0,
+        "local-last": local_last,
+        "central": central,
+        "central-last": central_last,
+        "footer": footer,
+    }
+    if case.get("zip64"):
+        records |= {"zip64-record": footer - 76, "zip64-locator": footer - 20}
+    for patch in case.get("zip_patches", []):
+        start = records[patch["record"]] + patch["offset"]
+        replacement = bytes(patch["bytes"])
+        assert start + len(replacement) <= len(data)
+        data[start : start + len(replacement)] = replacement
 
 
 def _write_case(path: Path, profile: str, case: dict[str, Any]) -> None:
@@ -65,11 +97,18 @@ def _write_case(path: Path, profile: str, case: dict[str, Any]) -> None:
             other = _MANIFEST_NAMES["java" if profile == "spec" else "spec"]
             archive.writestr(other, encoded)
 
-    if operation == "truncated-footer":
-        path.write_bytes(path.read_bytes()[:-1])
-    elif operation == "local-name-mismatch":
+    if (
+        case.get("zip64")
+        or case.get("zip_patches")
+        or operation in {"truncated-footer", "local-name-mismatch"}
+    ):
         data = bytearray(path.read_bytes())
-        data[30] = ord("x")
+        if case.get("zip64") or case.get("zip_patches"):
+            _patch_zip(data, case)
+        if operation == "truncated-footer":
+            data.pop()
+        elif operation == "local-name-mismatch":
+            data[30] = ord("x")
         path.write_bytes(data)
 
 
@@ -97,8 +136,8 @@ def test_shared_zip_profile_conformance(
     monkeypatch.setattr(Kas, "unwrap", rewrap)
     expected = case["expect"]
 
-    def open_case() -> None:
-        open_tdf(
+    def open_case() -> str | None:
+        return open_tdf_with_metadata(
             source,
             dest,
             kas_url=_CORPUS["kas_url"],
@@ -111,7 +150,7 @@ def test_shared_zip_profile_conformance(
         )
 
     if expected == "accept":
-        open_case()
+        assert open_case() == case.get("metadata")
         assert called
         assert dest.read_bytes() == base64.b64decode(_CORPUS["plaintext"])
     else:
@@ -142,3 +181,27 @@ def test_rejects_foreign_profile_input(
     with pytest.raises(TdfError):
         open_tdf(source, dest, kas_url=_CORPUS["kas_url"], access_token="test")
     assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize("profile", _MANIFEST_NAMES)
+def test_rejects_every_truncated_archive_prefix(
+    profile: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.tdf"
+    dest = tmp_path / "restored.bin"
+    case = next(case for case in _CORPUS["cases"] if case["id"] == "BASE-KNOWN-ANSWER")
+    _write_case(source, profile, case)
+    archive = source.read_bytes()
+
+    def rewrap(kas: Kas, policy: str, entry: dict[str, Any]) -> bytes:
+        pytest.fail(f"A truncated {profile} archive triggered KAS access")
+
+    monkeypatch.setattr(Kas, "unwrap", rewrap)
+    for length in range(len(archive)):
+        source.write_bytes(archive[:length])
+        try:
+            open_tdf(source, dest, kas_url=_CORPUS["kas_url"], access_token="test")
+        except TdfError:
+            assert list(tmp_path.iterdir()) == [source], f"{profile} at byte {length}"
+        else:
+            pytest.fail(f"Accepted a {profile} archive truncated at byte {length}")

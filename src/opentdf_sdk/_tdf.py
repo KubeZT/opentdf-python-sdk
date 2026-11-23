@@ -11,7 +11,7 @@ from tempfile import NamedTemporaryFile
 from typing import IO, Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
-from zipfile import ZIP64_LIMIT, ZIP_STORED, BadZipFile, ZipExtFile, ZipFile
+from zipfile import ZIP64_LIMIT, ZIP_STORED, BadZipFile, ZipExtFile, ZipFile, ZipInfo
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -402,9 +402,38 @@ def _check_directory(file: IO[bytes], length: int) -> None:
     if size > 4096 or offset + size != length - footer_size:
         raise TdfError("Invalid ZIP directory")
 
+    file.seek(offset)
+    directory = file.read(size)
+    cursor = 0
+    for _ in range(2):
+        if directory[cursor : cursor + 4] != b"PK\x01\x02":
+            raise TdfError("Invalid ZIP central header")
+        name, extra, comment = struct.unpack_from("<3H", directory, cursor + 28)
+        cursor += 46 + name + extra + comment
+        if cursor > len(directory):
+            raise TdfError("Truncated ZIP central header")
+
+
+def _check_local_header(file: IO[bytes], info: ZipInfo) -> None:
+    file.seek(info.header_offset)
+    header = file.read(30)
+    flags, method = struct.unpack_from("<HH", header, 6)
+    (name_length,) = struct.unpack_from("<H", header, 26)
+    name = info.filename.encode()
+    if (
+        header[:4] != b"PK\x03\x04"
+        or method != ZIP_STORED
+        or flags & 1
+        or (flags ^ info.flag_bits) & 8
+        or name_length != len(name)
+        or file.read(name_length) != name
+    ):
+        raise TdfError("Inconsistent ZIP local header")
+
 
 def _read(
     archive: ZipFile,
+    content: IO[bytes],
     output: IO[bytes],
     kas: KasConfig,
     required_assertions: Sequence[str],
@@ -425,6 +454,8 @@ def _read(
         raise TdfError("Expected uncompressed ZIP members")
     if not any(info.header_offset == 0 for info in entries):
         raise TdfError("Expected ZIP header at the start of the archive")
+    for entry in entries:
+        _check_local_header(content, entry)
     manifest_name = SPEC_MANIFEST if spec else JAVA_MANIFEST
     manifest_entry = archive.getinfo(manifest_name)
     if manifest_entry.file_size > MAX_MANIFEST:
@@ -654,6 +685,7 @@ def open_tdf_with_metadata(
             with ZipFile(content) as archive:
                 metadata = _read(
                     archive,
+                    content,
                     output,
                     config,
                     required_assertions,

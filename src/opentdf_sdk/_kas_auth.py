@@ -79,6 +79,7 @@ def request_json(
         connection.request(method, path, body, headers or {})
         with connection.getresponse() as response:
             status = response.status
+            length = response.length
             payload = response.read(_RESPONSE_LIMIT + 1)
     except (OSError, http.client.HTTPException):
         raise TdfError(f"{context} could not be reached") from None
@@ -86,6 +87,8 @@ def request_json(
         connection.close()
     if len(payload) > _RESPONSE_LIMIT:
         raise TdfError(f"{context} response exceeded the size limit")
+    if isinstance(length, int) and len(payload) != length:
+        raise TdfError(f"Incomplete {context} response")
     try:
         return status, parse_object(payload)
     except (ValueError, RecursionError):

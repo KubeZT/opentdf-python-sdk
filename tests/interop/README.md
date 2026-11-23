@@ -30,6 +30,12 @@ The suite also verifies
 that the shared harness and [conformance corpus](../conformance/README.md)
 match across checkouts.
 
+The combined-feature cases use P-256 wrapping and rewrap, two required
+policy attributes, encrypted UTF-8 metadata, and both assertion algorithms
+in each archive. Rust and Python obtain local OAuth tokens through platform
+discovery. Both reject partial entitlement, missing assertions, and
+late ciphertext damage without leaving output.
+
 To reuse a trusted checkout of the pinned release, set
 `OTDF_TEST_PLATFORM_SOURCE`. Set `OTDF_TEST_PLATFORM_BINARY` as well to
 reuse an existing build. The runner still provisions a fresh test stack.

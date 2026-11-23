@@ -1,10 +1,15 @@
 import base64
+import errno
 import hmac
 import json
+import os
 import struct
 import zipfile
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Barrier
 from typing import Any, Literal, cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -12,6 +17,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
 
 from opentdf_sdk import (
     AccessDenied,
@@ -31,8 +38,7 @@ _SECOND_ATTRIBUTE = "https://example.com/attr/region/value/east"
 _SEGMENT_SIZE = 2 * 1024 * 1024
 
 
-@pytest.fixture
-def local_key(monkeypatch: pytest.MonkeyPatch) -> Callable[[], bytes]:
+def _stub_kas(monkeypatch: pytest.MonkeyPatch) -> Callable[[], bytes]:
     key: bytes | None = None
 
     def wrap(kas: Kas, data_key: bytes, key_id: str | None) -> tuple[str, str]:
@@ -50,6 +56,11 @@ def local_key(monkeypatch: pytest.MonkeyPatch) -> Callable[[], bytes]:
     monkeypatch.setattr(Kas, "wrap", wrap)
     monkeypatch.setattr(Kas, "unwrap", unwrap)
     return data_key
+
+
+@pytest.fixture
+def local_key(monkeypatch: pytest.MonkeyPatch) -> Callable[[], bytes]:
+    return _stub_kas(monkeypatch)
 
 
 def _create(
@@ -120,6 +131,41 @@ def test_roundtrip_across_segment_boundaries(
     assert encrypted_payload == expected
     _open(container, dest)
     assert dest.read_bytes() == data
+
+
+@settings(max_examples=64, derandomize=True)
+@example(data=bytes(range(34)), metadata="日本語\x00", profile="java")
+@example(data=bytes(range(34)), metadata="日本語\x00", profile="spec")
+@given(
+    data=st.one_of(st.binary(max_size=16), st.binary(min_size=17, max_size=256)),
+    metadata=st.none() | st.text(max_size=24),
+    profile=st.sampled_from(["java", "spec"]),
+)
+def test_binary_and_metadata_round_trip(
+    data: bytes, metadata: str | None, profile: Literal["java", "spec"]
+) -> None:
+    with TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as patch:
+        patch.setattr(_tdf, "SEGMENT_SIZE", 17)
+        _stub_kas(patch)
+        source = Path(directory) / "input"
+        archive = Path(directory) / "archive.tdf"
+        output = Path(directory) / "output"
+        source.write_bytes(data)
+
+        create_tdf(
+            source,
+            archive,
+            kas_url=_KAS_URL,
+            access_token="test",
+            attribute=_ATTRIBUTE,
+            metadata=metadata,
+            profile=profile,
+        )
+        recovered = open_tdf_with_metadata(
+            archive, output, kas_url=_KAS_URL, access_token="test"
+        )
+        assert recovered == (metadata or None)
+        assert output.read_bytes() == data
 
 
 @pytest.mark.parametrize("profile", ["java", "spec"])
@@ -598,6 +644,67 @@ def test_writer_keeps_destination_created_during_operation(
     assert not list(tmp_path.glob(".tdf-*"))
 
 
+def test_concurrent_readers_publish_once(
+    tmp_path: Path, local_key: Callable[[], bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "input.bin"
+    archive = tmp_path / "archive.tdf"
+    destination = tmp_path / "output.bin"
+    data = bytes(range(256)) * 8193
+    source.write_bytes(data)
+    _create(source, archive)
+    ready = Barrier(2)
+
+    def unwrap(kas: Kas, policy: str, entry: dict[str, Any]) -> bytes:
+        ready.wait(timeout=5)
+        return local_key()
+
+    def read() -> bool:
+        try:
+            _open(archive, destination)
+        except FileExistsError:
+            return False
+        return True
+
+    monkeypatch.setattr(Kas, "unwrap", unwrap)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(read) for _ in range(2)]
+        assert sorted(future.result(timeout=10) for future in futures) == [False, True]
+    assert destination.read_bytes() == data
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
+@pytest.mark.parametrize("operation", [_create, _open])
+def test_publish_failure_removes_the_unpublished_file(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: Callable[[Path, Path], None],
+) -> None:
+    source = tmp_path / "input.bin"
+    destination = tmp_path / "output"
+    source.write_bytes(b"file contents")
+    if operation is _open:
+        archive = tmp_path / "archive.tdf"
+        _create(source, archive)
+        source = archive
+    original = source.read_bytes()
+
+    def reject_publish(temporary: str, target: Path) -> None:
+        assert target == destination
+        assert Path(temporary).stat().st_size > 0
+        raise OSError(errno.ENOSPC, "full filesystem")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "link", reject_publish)
+        with pytest.raises(OSError) as error:
+            operation(source, destination)
+    assert error.value.errno == errno.ENOSPC
+    assert not destination.exists()
+    assert source.read_bytes() == original
+    assert not list(tmp_path.glob(".tdf-*"))
+
+
 @pytest.mark.parametrize("operation", [_create, _open])
 def test_rejects_nonregular_input(
     tmp_path: Path, operation: Callable[[Path, Path], None]
@@ -689,6 +796,41 @@ def test_adaptive_segment_plan(
 ) -> None:
     assert _tdf._writer_segment_plan(length, spec=False) == (size, java_count)
     assert _tdf._writer_segment_plan(length, spec=True) == (size, spec_count)
+
+
+@settings(max_examples=160, derandomize=True)
+@given(length=st.integers(min_value=0, max_value=_tdf.MAX_PLAINTEXT))
+def test_segment_plan_preserves_lengths_and_limits(length: int) -> None:
+    _assert_segment_plan(length)
+
+
+def test_segment_plan_at_every_size_transition() -> None:
+    step = 32 * 1024**3
+    for boundary in range(2 * step, _tdf.MAX_PLAINTEXT, step):
+        for length in (boundary - 1, boundary, boundary + 1):
+            _assert_segment_plan(length)
+    _assert_segment_plan(_tdf.MAX_PLAINTEXT - 1)
+    _assert_segment_plan(_tdf.MAX_PLAINTEXT)
+
+
+def _assert_segment_plan(length: int) -> None:
+    size, spec_count = _tdf._writer_segment_plan(length, spec=True)
+    java_size, java_count = _tdf._writer_segment_plan(length, spec=False)
+    mib = 1024**2
+
+    assert java_size == size
+    assert size % mib == 0
+    assert _SEGMENT_SIZE <= size <= _tdf.MAX_SEGMENT_SIZE
+    if size > _SEGMENT_SIZE:
+        assert length > (size - mib) * _tdf.MAX_DATA_SEGMENTS
+    assert 1 <= spec_count <= _tdf.MAX_DATA_SEGMENTS
+    assert 1 <= java_count <= _tdf.MAX_SEGMENTS
+    spec_tail = length - (spec_count - 1) * size
+    java_tail = length - (java_count - 1) * size
+    assert 0 <= spec_tail <= size
+    assert (spec_tail == 0) == (length == 0)
+    assert 0 <= java_tail < size
+    assert java_count - spec_count == (length > 0 and spec_tail == size)
 
 
 @pytest.mark.parametrize("operation", [_create, _open])

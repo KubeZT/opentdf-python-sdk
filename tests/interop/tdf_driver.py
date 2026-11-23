@@ -36,7 +36,10 @@ def main() -> None:
             "open-features",
             "create-assertions",
             "create-spec-assertions",
+            "create-composed-p256",
+            "create-spec-composed-p256",
             "open-assertions",
+            "open-composed-p256",
         ],
     )
     parser.add_argument("source", type=Path)
@@ -48,6 +51,7 @@ def main() -> None:
         if origin := os.environ.get("OTDF_MANIFEST_KAS_URL"):
             kas = kas.with_manifest_origin(origin)
         p256 = args.command.endswith("-p256")
+        composed = args.command.endswith("composed-p256")
         if p256:
             kas = kas.with_key_algorithm("ec:secp256r1")
         if (
@@ -84,16 +88,31 @@ def main() -> None:
             )
             if metadata != expected:
                 parser.exit(1, "Recovered metadata differs from expected metadata\n")
-        elif (
-            args.command in {"create-assertions", "create-spec-assertions"}
-            and len(args.extra) == 1
-        ):
+        elif args.command in {
+            "create-assertions",
+            "create-spec-assertions",
+            "create-composed-p256",
+            "create-spec-composed-p256",
+        }:
+            valid_count = len(args.extra) >= 3 if composed else len(args.extra) == 1
+            if not valid_count:
+                parser.error("invalid signing, metadata or attribute arguments")
+            metadata_text = None
+            if composed:
+                private, metadata_file, *attributes = args.extra
+                metadata_text = Path(metadata_file).read_bytes().decode("utf-8")
+            else:
+                private = args.extra[0]
+                attributes = [os.environ["OTDF_ATTRIBUTE"]]
             create_tdf(
                 args.source,
                 args.destination,
-                attribute=os.environ["OTDF_ATTRIBUTE"],
-                profile="spec" if args.command == "create-spec-assertions" else "java",
-                key_id=os.environ.get("OTDF_KAS_KEY_ID"),
+                attributes=attributes,
+                metadata=metadata_text,
+                profile="spec" if args.command.startswith("create-spec-") else "java",
+                key_id=os.environ.get(
+                    "OTDF_TEST_KAS_EC_KEY_ID" if p256 else "OTDF_KAS_KEY_ID"
+                ),
                 assertions=[
                     AssertionConfig(
                         id="tdf-binding",
@@ -114,13 +133,15 @@ def main() -> None:
                             "urn:opentdf:test:assertion",
                             "publisher assertion",
                         ),
-                        signing_key_pem=Path(args.extra[0]).read_bytes(),
+                        signing_key_pem=Path(private).read_bytes(),
                     ),
                 ],
                 kas=kas,
             )
-        elif args.command == "open-assertions" and len(args.extra) == 1:
-            open_tdf(
+        elif args.command in {"open-assertions", "open-composed-p256"}:
+            if len(args.extra) != (2 if composed else 1):
+                parser.error("invalid verification or metadata arguments")
+            recovered_metadata = open_tdf_with_metadata(
                 args.source,
                 args.destination,
                 required_assertions=("tdf-binding", "publisher"),
@@ -129,6 +150,10 @@ def main() -> None:
                 },
                 kas=kas,
             )
+            if composed and recovered_metadata != Path(
+                args.extra[1]
+            ).read_bytes().decode("utf-8"):
+                parser.exit(1, "Recovered metadata differs from expected metadata\n")
         elif args.command in {"open", "open-p256", "expect-denied"} and not args.extra:
             open_tdf(
                 args.source,
