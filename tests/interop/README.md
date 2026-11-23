@@ -20,7 +20,9 @@ make test-e2e PYTHON=/path/to/venv/bin/python
 The interoperability matrix exercises Java and Go in both directions with each native SDK,
 Rust ↔ Python, and round trips within each SDK. Java uses the legacy ZIP
 layout. Go reads both tested layouts. Each run also checks shared-KAS
-authorization, failed reads, and empty native payloads. With the self-starting
+authorization, failed reads, and empty native payloads. The local stack
+enables the pinned Platform's P-256 preview and tests EC wrapping, EC
+rewrap sessions, platform discovery, and Keycloak client credentials. With the self-starting
 platform, the matrix also verifies multiple policy attributes and encrypted
 UTF-8 metadata across all four SDKs. The
 [capability matrix](../../docs/capabilities.md) lists the profiles and tested peers.

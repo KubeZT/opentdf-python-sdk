@@ -15,9 +15,17 @@ an installed Python wheel, Java `0.19.1`, and Go `sdk/v0.35.0`. See the
 | HS256 and caller-key RS256 signed assertions | Spec | Rust, Python | Rust, Python, Go | [Assertion round trips](../tests/interop/matrix.py) |
 | Assertion key mismatch, replay, tampering, and required IDs | Both | [Shared fixtures](../tests/vectors/zip-profile-v1.json) | Rust, Python | [Offline conformance](../tests/conformance/README.md) and [live rejection cases](../tests/interop/matrix.py) |
 | All-of authorization and metadata ciphertext integrity | Both | Java (Java-compatible), Rust (Spec) | Rust, Python | [Entitlement and tamper checks](../tests/interop/matrix.py) |
-| Explicit KAS routing with the producer and its IdP offline | Both | Rust, Python | Rust, Python | [Two-site test](../tests/interop/federation.py) |
+| P-256 wrapping and P-256 rewrap | Java-compatible | Rust, Python, Java, Go | Rust, Python, Java, Go | [P-256 round trips](../tests/interop/matrix.py) |
+| P-256 wrapping and P-256 rewrap | Spec | Rust, Python | Rust, Python, Go | [P-256 round trips](../tests/interop/matrix.py) |
+| RSA and P-256 mixed wrapping and rewrap sessions | Java-compatible | Rust, Python, Java | Rust, Python | [Session checks](../tests/interop/matrix.py) |
+| Configured platform discovery and OAuth client credentials | Java-compatible | Rust, Python | Rust, Python | [Platform connection checks](../tests/interop/matrix.py) |
+| RSA and P-256 access with the producer and its IdP offline | Both | Rust, Python | Rust, Python | [Two-site test](../tests/interop/federation.py) |
 | Large-file round trips | Both | Rust, Python | Rust, Python | [Large-payload suite](../tests/interop/large_payloads.py) |
 | ZIP64 round trips at 8 GiB + 1 byte | Both | Rust (Java-compatible), Python (Spec) | Rust, Python | [ZIP64 case](../tests/interop/large_payloads.py) |
+
+The pinned Platform requires `services.kas.preview.ec_tdf_enabled` for
+P-256 wrapping and rewrap. The live discovery tests use the co-hosted
+KAS. Local unit tests also cover an advertised KAS on a separate origin.
 
 The feature round trips compare payload bytes and decrypted metadata. The
 authorization case checks access with both required values and denial with

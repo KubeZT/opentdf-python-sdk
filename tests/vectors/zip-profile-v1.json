@@ -559,6 +559,45 @@
       "set": {
         "/assertions/0/binding/signature": ""
       }
+    },
+    {
+      "id": "P256-GRANT",
+      "expect": "accept",
+      "set": {
+        "/encryptionInformation/keyAccess/0/type": "ec-wrapped",
+        "/encryptionInformation/keyAccess/0/kid": "fixture-p256",
+        "/encryptionInformation/keyAccess/0/wrappedKey": "AAAAAAAAAAAAAAAAPV901TwytGMyjMMH5RkdF6sIfDM0TQREfo7jmge7Z0igQVySkYYeMVbkkP0Y0NBj",
+        "/encryptionInformation/keyAccess/0/ephemeralPublicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ3\n8hs1pgtI/EdmmXgHd1UQ247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==\n-----END PUBLIC KEY-----\n"
+      }
+    },
+    {
+      "id": "P256-EPHEMERAL-MISSING",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/type": "ec-wrapped",
+        "/encryptionInformation/keyAccess/0/kid": "fixture-p256",
+        "/encryptionInformation/keyAccess/0/wrappedKey": "AAAAAAAAAAAAAAAAPV901TwytGMyjMMH5RkdF6sIfDM0TQREfo7jmge7Z0igQVySkYYeMVbkkP0Y0NBj"
+      }
+    },
+    {
+      "id": "P256-EPHEMERAL-WRONG-CURVE",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/type": "ec-wrapped",
+        "/encryptionInformation/keyAccess/0/kid": "fixture-p256",
+        "/encryptionInformation/keyAccess/0/wrappedKey": "AAAAAAAAAAAAAAAAPV901TwytGMyjMMH5RkdF6sIfDM0TQREfo7jmge7Z0igQVySkYYeMVbkkP0Y0NBj",
+        "/encryptionInformation/keyAccess/0/ephemeralPublicKey": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAECNmZBXuj0tlpJgBFxVuX8IkCWVmm9DTW\nUdIH0Z+5bp5P4Ohuvg5k+FuWqcdSld9hjoDx+lsbPO23v+jf/W26dLJ12HW8bMQ+\nkE5QXyVqtCVf/UPpTTniLWFQHnAKlA6A\n-----END PUBLIC KEY-----\n"
+      }
+    },
+    {
+      "id": "P256-WRAPPED-KEY-LENGTH",
+      "expect": "reject-structural",
+      "set": {
+        "/encryptionInformation/keyAccess/0/type": "ec-wrapped",
+        "/encryptionInformation/keyAccess/0/kid": "fixture-p256",
+        "/encryptionInformation/keyAccess/0/wrappedKey": "AA==",
+        "/encryptionInformation/keyAccess/0/ephemeralPublicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ3\n8hs1pgtI/EdmmXgHd1UQ247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==\n-----END PUBLIC KEY-----\n"
+      }
     }
   ],
   "known_assertions": {

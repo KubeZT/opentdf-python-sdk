@@ -21,7 +21,7 @@ Run `make test-conformance` for the shared offline corpus. See the
 | Java-compatible (default) | `0.manifest.json` | Root `schemaVersion` | Lowercase hexadecimal |
 | Spec ZIP (explicit) | `manifest.json` | `payload.tdf_spec_version` | Raw digest bytes |
 
-The profiles cover a single RSA KAS grant, one or more policy attributes,
+The profiles cover one RSA-2048 or P-256 KAS grant, one or more policy attributes,
 optional encrypted UTF-8 metadata, and regular files. Writers start at 2 MiB per segment and adapt the segment
 size to the payload. The 64 MiB segment limit and the manifest segment
 budget give an effective capacity of 2 TiB. Both write `0.payload`. Spec ZIP readers

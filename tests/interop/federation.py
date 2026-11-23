@@ -7,6 +7,7 @@ import hashlib
 import os
 import signal
 import socket
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
@@ -56,17 +57,24 @@ def main() -> None:
         plaintext = bytes(range(256)) * 8193
         payload = work / "input.bin"
         payload.write_bytes(plaintext)
-        archives = {}
+        archives: dict[Path, tuple[str, bytes]] = {}
         enrollment_key = work / "wrapping-key.pem"
+        enrollment_ec_key = work / "ec-wrapping-key.pem"
+        key_files = {
+            "kas-private.pem": enrollment_key,
+            "kas-ec-private.pem": enrollment_ec_key,
+        }
 
         with TemporaryDirectory(prefix="producer-", dir=work) as producer_dir:
             producer = Path(producer_dir)
             with platform_site(source, binary, producer) as site_a:
                 ports_a = test_ports(site_a)
                 for peer, driver in drivers.items():
-                    for operation, manifest_name in (
-                        ("create", JAVA_MANIFEST),
-                        ("create-spec", SPEC_MANIFEST),
+                    for operation, manifest_name, kid, reader in (
+                        ("create", JAVA_MANIFEST, "r1", "open"),
+                        ("create-spec", SPEC_MANIFEST, "r1", "open"),
+                        ("create-p256", JAVA_MANIFEST, "e1", "open-p256"),
+                        ("create-spec-p256", SPEC_MANIFEST, "e1", "open-p256"),
                     ):
                         archive = work / f"{peer}-{operation}.tdf"
                         invoke(
@@ -81,14 +89,17 @@ def main() -> None:
                         )
                         manifest, _ = read_archive(archive, manifest_name)
                         grant = manifest["encryptionInformation"]["keyAccess"][0]
-                        if grant["url"] != MANIFEST_ORIGIN or grant["kid"] != "r1":
+                        if grant["url"] != MANIFEST_ORIGIN or grant["kid"] != kid:
                             raise ValueError(f"{peer} wrote the wrong wrapping grant")
-                        archives[archive] = hashlib.sha256(
-                            archive.read_bytes()
-                        ).digest()
-                with open(enrollment_key, "xb", opener=private_file) as private:
-                    private.write((producer / "kas-private.pem").read_bytes())
-                producer_public_key = (producer / "kas-cert.pem").read_bytes()
+                        archives[archive] = (
+                            reader,
+                            hashlib.sha256(archive.read_bytes()).digest(),
+                        )
+                producer_public_keys = {}
+                for filename, enrollment in key_files.items():
+                    with open(enrollment, "xb", opener=private_file) as private:
+                        private.write((producer / filename).read_bytes())
+                    producer_public_keys[filename] = public_key(producer / filename)
         assert_offline(ports_a)
         print("Producer KAS, IdP and database are offline", flush=True)
 
@@ -100,20 +111,27 @@ def main() -> None:
             exclude_ports=ports_a,
         ) as unenrolled:
             assert_offline(ports_a)
-            if (work / "wrong-key/kas-cert.pem").read_bytes() == producer_public_key:
+            if any(
+                public_key(work / "wrong-key" / name) == key
+                for name, key in producer_public_keys.items()
+            ):
                 raise ValueError("Wrong-key control reused the trust-domain key")
             for peer, driver in drivers.items():
-                invoke(
-                    peer,
-                    driver,
-                    "open",
-                    archive,
-                    work / f"{peer}-wrong-key.bin",
-                    expected_error="Error:" if peer == "rust" else "TDF error:",
-                    unchanged=None,
-                    **unenrolled,
-                    OTDF_MANIFEST_KAS_URL=MANIFEST_ORIGIN,
-                )
+                for operation in ("open", "open-p256"):
+                    sample = next(
+                        p for p, (reader, _) in archives.items() if reader == operation
+                    )
+                    invoke(
+                        peer,
+                        driver,
+                        operation,
+                        sample,
+                        work / f"{peer}-{operation}-wrong-key.bin",
+                        expected_error="Error:" if peer == "rust" else "TDF error:",
+                        unchanged=None,
+                        **unenrolled,
+                        OTDF_MANIFEST_KAS_URL=MANIFEST_ORIGIN,
+                    )
         ports_retired = ports_a | test_ports(unenrolled)
         assert_offline(ports_retired)
 
@@ -122,24 +140,34 @@ def main() -> None:
             binary,
             work / "consumer",
             wrapping_key=enrollment_key,
+            ec_wrapping_key=enrollment_ec_key,
             exclude_ports=ports_retired,
         ) as site_b:
             assert_offline(ports_retired)
-            if (work / "consumer/kas-cert.pem").read_bytes() != producer_public_key:
-                raise ValueError("Consumer did not enroll the trust-domain key")
+            if any(
+                public_key(work / "consumer" / name) != key
+                for name, key in producer_public_keys.items()
+            ):
+                raise ValueError("Consumer did not enroll the trust-domain keys")
 
             for peer, driver in drivers.items():
-                for artifact in archives:
+                for artifact, (operation, _) in archives.items():
                     output = work / f"{artifact.stem}-to-{peer}.bin"
+                    environment = site_b | {"OTDF_MANIFEST_KAS_URL": MANIFEST_ORIGIN}
+                    if operation == "open-p256":
+                        environment |= {
+                            "OTDF_TEST_AUTH_MODE": "discover-client-credentials",
+                            "OTDF_ACCESS_TOKEN": "",
+                            "OTDF_KAS_URL": site_a["OTDF_KAS_URL"],
+                        }
                     invoke(
                         peer,
                         driver,
-                        "open",
+                        operation,
                         artifact,
                         output,
                         unchanged=None,
-                        **site_b,
-                        OTDF_MANIFEST_KAS_URL=MANIFEST_ORIGIN,
+                        **environment,
                     )
                     if output.read_bytes() != plaintext:
                         raise ValueError(f"{peer} opened {artifact.name} incorrectly")
@@ -193,15 +221,23 @@ def main() -> None:
                 )
 
             assert_offline(ports_retired)
-            for artifact, digest in archives.items():
+            for artifact, (_, digest) in archives.items():
                 if hashlib.sha256(artifact.read_bytes()).digest() != digest:
                     raise ValueError(f"{artifact.name} changed during federation")
-            print("All four producer archives are byte-identical", flush=True)
+            print(
+                f"All {len(archives)} producer archives are byte-identical", flush=True
+            )
         assert_offline(test_ports(site_b) | ports_retired)
 
 
 def private_file(name: str, flags: int) -> int:
     return os.open(name, flags, 0o600)
+
+
+def public_key(private_key: Path) -> bytes:
+    return subprocess.check_output(
+        ["openssl", "pkey", "-in", str(private_key), "-pubout"], timeout=15
+    )
 
 
 if __name__ == "__main__":

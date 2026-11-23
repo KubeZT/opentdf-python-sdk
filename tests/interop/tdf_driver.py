@@ -6,6 +6,7 @@ from opentdf_sdk import (
     AccessDenied,
     AssertionConfig,
     AssertionStatement,
+    KasConfig,
     TdfError,
     create_tdf,
     open_tdf,
@@ -20,6 +21,9 @@ def main() -> None:
         choices=[
             "create",
             "create-spec",
+            "create-p256",
+            "create-spec-p256",
+            "open-p256",
             "open",
             "expect-denied",
             "create-features",
@@ -34,20 +38,26 @@ def main() -> None:
     parser.add_argument("destination", type=Path)
     parser.add_argument("extra", nargs="*")
     args = parser.parse_args()
-    kas_url = os.environ["OTDF_KAS_URL"]
-    access_token = os.environ["OTDF_ACCESS_TOKEN"]
-    manifest_kas_url = os.environ.get("OTDF_MANIFEST_KAS_URL") or None
     try:
-        if args.command in {"create", "create-spec"} and not args.extra:
+        kas = kas_config()
+        if origin := os.environ.get("OTDF_MANIFEST_KAS_URL"):
+            kas = kas.with_manifest_origin(origin)
+        p256 = args.command.endswith("-p256")
+        if p256:
+            kas = kas.with_key_algorithm("ec:secp256r1")
+        if (
+            args.command in {"create", "create-spec", "create-p256", "create-spec-p256"}
+            and not args.extra
+        ):
             create_tdf(
                 args.source,
                 args.destination,
                 attribute=os.environ["OTDF_ATTRIBUTE"],
-                key_id=os.environ.get("OTDF_KAS_KEY_ID"),
-                profile="spec" if args.command == "create-spec" else "java",
-                manifest_kas_url=manifest_kas_url,
-                kas_url=kas_url,
-                access_token=access_token,
+                key_id=os.environ.get(
+                    "OTDF_TEST_KAS_EC_KEY_ID" if p256 else "OTDF_KAS_KEY_ID"
+                ),
+                profile="spec" if args.command.startswith("create-spec") else "java",
+                kas=kas,
             )
         elif args.command in {"create-features", "create-spec-features"} and args.extra:
             metadata, *attributes = args.extra
@@ -58,18 +68,14 @@ def main() -> None:
                 metadata=Path(metadata).read_bytes().decode("utf-8"),
                 key_id=os.environ.get("OTDF_KAS_KEY_ID"),
                 profile="spec" if args.command == "create-spec-features" else "java",
-                manifest_kas_url=manifest_kas_url,
-                kas_url=kas_url,
-                access_token=access_token,
+                kas=kas,
             )
         elif args.command == "open-features" and len(args.extra) == 1:
             expected = Path(args.extra[0]).read_bytes().decode("utf-8")
             metadata = open_tdf_with_metadata(
                 args.source,
                 args.destination,
-                manifest_kas_url=manifest_kas_url,
-                kas_url=kas_url,
-                access_token=access_token,
+                kas=kas,
             )
             if metadata != expected:
                 parser.exit(1, "Recovered metadata differs from expected metadata\n")
@@ -82,7 +88,6 @@ def main() -> None:
                 args.destination,
                 attribute=os.environ["OTDF_ATTRIBUTE"],
                 profile="spec" if args.command == "create-spec-assertions" else "java",
-                manifest_kas_url=manifest_kas_url,
                 key_id=os.environ.get("OTDF_KAS_KEY_ID"),
                 assertions=[
                     AssertionConfig(
@@ -107,28 +112,23 @@ def main() -> None:
                         signing_key_pem=Path(args.extra[0]).read_bytes(),
                     ),
                 ],
-                kas_url=kas_url,
-                access_token=access_token,
+                kas=kas,
             )
         elif args.command == "open-assertions" and len(args.extra) == 1:
             open_tdf(
                 args.source,
                 args.destination,
-                manifest_kas_url=manifest_kas_url,
                 required_assertions=("tdf-binding", "publisher"),
                 assertion_verification_keys={
                     "publisher": Path(args.extra[0]).read_bytes()
                 },
-                kas_url=kas_url,
-                access_token=access_token,
+                kas=kas,
             )
-        elif args.command in {"open", "expect-denied"} and not args.extra:
+        elif args.command in {"open", "open-p256", "expect-denied"} and not args.extra:
             open_tdf(
                 args.source,
                 args.destination,
-                manifest_kas_url=manifest_kas_url,
-                kas_url=kas_url,
-                access_token=access_token,
+                kas=kas,
             )
         else:
             parser.error("invalid arguments for command")
@@ -141,6 +141,28 @@ def main() -> None:
     else:
         if args.command == "expect-denied":
             parser.exit(1, "KAS unexpectedly granted access\n")
+
+
+def kas_config() -> KasConfig:
+    mode = os.environ.get("OTDF_TEST_AUTH_MODE", "")
+    if mode in ("", "bearer"):
+        return KasConfig(os.environ["OTDF_KAS_URL"], os.environ["OTDF_ACCESS_TOKEN"])
+    if mode == "discover":
+        return KasConfig.discover(
+            os.environ["OTDF_PLATFORM_URL"], os.environ["OTDF_ACCESS_TOKEN"]
+        )
+    if mode in ("client-credentials", "discover-client-credentials"):
+        issuer = os.environ["OTDF_TEST_ISSUER"]
+        client_id = os.environ["OTDF_CLIENT_ID"]
+        client_secret = os.environ["OTDF_CLIENT_SECRET"]
+        if mode == "client-credentials":
+            return KasConfig.from_client_credentials(
+                os.environ["OTDF_KAS_URL"], issuer, client_id, client_secret
+            )
+        return KasConfig.discover_with_client_credentials(
+            os.environ["OTDF_PLATFORM_URL"], issuer, client_id, client_secret
+        )
+    raise TdfError("Invalid test authentication mode")
 
 
 if __name__ == "__main__":

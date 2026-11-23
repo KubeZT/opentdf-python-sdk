@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from ._kas import TdfError
+from ._errors import TdfError
 
 
 def json_object(value: Any) -> dict[str, Any]:

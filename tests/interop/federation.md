@@ -6,12 +6,14 @@ OpenTDF sites with separate identity providers and policy databases.
 
 The test creates TDFs in both ZIP profiles before Site B exists. It stops
 the producer's platform, IdP, and database and confirms their ports are
-closed. An unenrolled site with a different RSA key under the same key ID
-cannot open the files. The harness then provisions Site B with the original
-trust-domain wrapping key and local policy. Both SDKs open each original
+closed. An unenrolled site with different RSA and P-256 keys under the
+same IDs cannot open those grants. The harness then provisions Site B with
+the original trust-domain keys and local policy. Both SDKs open each original
 archive at Site B, recover identical payload bytes, and verify the TDF's
 SHA-256 digest is unchanged. A missing or wrong route, a token from Site A,
-and an unentitled Site B token all fail without publishing plaintext.
+and an unentitled Site B token all fail without publishing plaintext. The
+P-256 cases discover the KAS at Site B and fetch a client-credentials
+token from Site B's issuer.
 
 ## Configure a trusted route
 
@@ -27,8 +29,8 @@ requires an exact match to the configured archive origin and sends rewrap
 only to the configured endpoint. The signed request preserves the original
 key access object. Existing callers use the endpoint as the archive origin.
 
-This test uses the same wrapping key and key ID at both sites. Enrollment
-copies a disposable RSA key between private temporary directories. In a
+Both sites use the same wrapping keys and key IDs. Enrollment copies
+disposable RSA and P-256 keys between private temporary directories. In a
 deployment, provisioning access to that key is a KAS operation. The SDKs
 receive neither the wrapping private key nor the signing identity of the
 producer. Sites that can use the same wrapping key share its compromise

@@ -1,20 +1,32 @@
 import base64
-import http.client
+import hashlib
 import json
+import os
 import time
-from typing import Any
-from urllib.parse import urlsplit
+from copy import copy
+from typing import Any, Literal
 
+from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from ._errors import AccessDenied as AccessDenied
+from ._errors import TdfError as TdfError
+from ._kas_auth import (
+    ClientCredentials,
+    bearer_token,
+    discover_platform,
+    request_json,
+    split_url,
+)
 
-class TdfError(ValueError):
-    """A TDF could not be created or opened."""
-
-
-class AccessDenied(TdfError):
-    """KAS denied access to the TDF."""
+KasAlgorithm = Literal["rsa:2048", "ec:secp256r1"]
+_P256 = "ec:secp256r1"
+_EC_BOX_LENGTH = 12 + 32 + 16
+_TDF_SALT = hashlib.sha256(b"TDF").digest()
 
 
 def encode(data: bytes) -> str:
@@ -48,91 +60,147 @@ def _oaep() -> padding.OAEP:
     )
 
 
-def _origin(url: str) -> tuple[str, int | None, bool]:
-    if any(not 0x21 <= ord(c) <= 0x7E for c in url) or any(c in url for c in "?#\\"):
-        raise TdfError("KAS URL must be an HTTP(S) origin")
+def _public_key(pem: object) -> object:
+    if not isinstance(pem, str) or not pem.isascii():
+        raise TdfError("Expected a PEM public key")
     try:
-        parsed = urlsplit(url)
-        port = parsed.port
-    except ValueError as exc:
-        raise TdfError("Invalid KAS origin") from exc
-    host = parsed.hostname
-    authority = parsed.netloc
-    ipv6_suffix = authority.rpartition("]")[2] if authority.startswith("[") else ""
-    if (
-        not host
-        or parsed.username is not None
-        or parsed.path not in {"", "/"}
-        or authority.endswith(":")
-        or ("[" in authority and not authority.startswith("["))
-        or (ipv6_suffix and not ipv6_suffix.startswith(":"))
-        or parsed.scheme not in {"https", "http"}
+        return serialization.load_pem_public_key(pem.encode("ascii"))
+    except (ValueError, UnsupportedAlgorithm):
+        raise TdfError("Invalid PEM public key") from None
+
+
+def _p256_public(pem: object) -> ec.EllipticCurvePublicKey:
+    key = _public_key(pem)
+    if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(
+        key.curve, ec.SECP256R1
     ):
-        raise TdfError("KAS URL must be an HTTP(S) origin")
-    if parsed.scheme == "http" and host not in {"localhost", "127.0.0.1", "::1"}:
-        raise TdfError("KAS HTTP is limited to loopback")
-    return host, port, parsed.scheme == "https"
+        raise TdfError("Expected a P-256 public key")
+    return key
 
 
-class Kas:
+def _public_pem(key: rsa.RSAPublicKey | ec.EllipticCurvePublicKey) -> str:
+    return key.public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode("ascii")
+
+
+def _ec_box(
+    private: ec.EllipticCurvePrivateKey, public: ec.EllipticCurvePublicKey
+) -> AESGCM:
+    secret = private.exchange(ec.ECDH(), public)
+    return AESGCM(
+        HKDF(algorithm=hashes.SHA256(), length=32, salt=_TDF_SALT, info=b"").derive(
+            secret
+        )
+    )
+
+
+def validate_wrapped_key(entry: dict[str, Any]) -> None:
+    ephemeral = entry.get("ephemeralPublicKey", "")
+    if entry.get("type") == "ec-wrapped":
+        _p256_public(ephemeral)
+        decode(entry.get("wrappedKey"), _EC_BOX_LENGTH)
+    else:
+        if ephemeral != "":
+            raise TdfError("Unexpected ephemeral public key for RSA-wrapped key")
+        decode(entry.get("wrappedKey"), 256)
+
+
+class KasConfig:
+    """A trusted KAS endpoint, its credential source, and its key algorithm."""
+
     def __init__(
         self, url: str, token: str, *, manifest_kas_url: str | None = None
     ) -> None:
-        self.host, self.port, self.https = _origin(url)
+        self._configure(url, bearer_token(token), manifest_kas_url)
+
+    def _configure(
+        self, url: str, source: str | ClientCredentials, manifest_kas_url: str | None
+    ) -> None:
+        self._endpoint = split_url(url, purpose="KAS origin")
         if manifest_kas_url is not None:
-            _origin(manifest_kas_url)
-        self.manifest_url = (
-            manifest_kas_url if manifest_kas_url is not None else url
+            split_url(manifest_kas_url, purpose="KAS origin")
+        self._manifest_url = (
+            url if manifest_kas_url is None else manifest_kas_url
         ).removesuffix("/")
+        self._source = source
+        self._algorithm: KasAlgorithm = "rsa:2048"
+
+    @classmethod
+    def from_client_credentials(
+        cls, endpoint: str, issuer: str, client_id: str, client_secret: str
+    ) -> "KasConfig":
+        """Use OAuth client credentials obtained from an explicitly trusted issuer."""
+        config = cls.__new__(cls)
+        config._configure(
+            endpoint, ClientCredentials(issuer, client_id, client_secret), None
+        )
+        return config
+
+    @classmethod
+    def discover(cls, platform: str, access_token: str) -> "KasConfig":
+        """Use the KAS advertised by a trusted OpenTDF platform."""
+        endpoint, _ = discover_platform(platform)
+        return cls(endpoint, access_token)
+
+    @classmethod
+    def discover_with_client_credentials(
+        cls, platform: str, issuer: str, client_id: str, client_secret: str
+    ) -> "KasConfig":
+        """Discover a KAS and check the advertised issuer before using credentials."""
+        endpoint, advertised_issuer = discover_platform(platform)
+        if advertised_issuer != issuer:
+            raise TdfError("Platform issuer does not match the configured issuer")
         if (
-            not token
-            or not token.isascii()
-            or any(not 0x21 <= ord(c) <= 0x7E for c in token)
+            split_url(platform).scheme == "https"
+            and split_url(issuer, allow_path=True).scheme != "https"
         ):
-            raise TdfError(
-                "Access token must contain printable ASCII without whitespace"
-            )
-        self.token = token
+            raise TdfError("HTTPS platform advertised a plaintext issuer")
+        return cls.from_client_credentials(endpoint, issuer, client_id, client_secret)
+
+    def with_key_algorithm(self, algorithm: KasAlgorithm) -> "KasConfig":
+        """Return a configuration with the selected wrapping and session key type."""
+        if algorithm not in ("rsa:2048", _P256):
+            raise TdfError("Unsupported KAS key algorithm")
+        result = copy(self)
+        result._algorithm = algorithm
+        return result
+
+    def with_manifest_origin(self, origin: str) -> "KasConfig":
+        """Return a configuration for archives that name a specific KAS origin."""
+        split_url(origin, purpose="KAS origin")
+        result = copy(self)
+        result._manifest_url = origin.removesuffix("/")
+        return result
+
+    @property
+    def manifest_url(self) -> str:
+        return self._manifest_url
 
     def _post(self, method: str, body: dict[str, Any]) -> dict[str, Any]:
-        connection_class = (
-            http.client.HTTPSConnection if self.https else http.client.HTTPConnection
+        token = self._source if isinstance(self._source, str) else self._source.token()
+        status, result = request_json(
+            self._endpoint,
+            "POST",
+            f"/kas.AccessService/{method}",
+            f"KAS {method}",
+            body=utf8_json(body),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Connect-Protocol-Version": "1",
+            },
         )
-        connection = connection_class(self.host, self.port, timeout=10)
-        try:
-            connection.request(
-                "POST",
-                f"/kas.AccessService/{method}",
-                utf8_json(body),
-                {
-                    "Authorization": f"Bearer {self.token}",
-                    "Content-Type": "application/json",
-                    "Connect-Protocol-Version": "1",
-                },
-            )
-            with connection.getresponse() as response:
-                status = response.status
-                payload = response.read(128 * 1024 + 1)
-        except (OSError, http.client.HTTPException) as exc:
-            raise TdfError(f"KAS {method} could not be reached") from exc
-        finally:
-            connection.close()
-        if len(payload) > 128 * 1024:
-            raise TdfError("KAS response exceeded the size limit")
-        try:
-            result = json.loads(payload)
-        except (ValueError, RecursionError) as exc:
-            raise TdfError(f"KAS {method} returned HTTP {status}") from exc
-        if not isinstance(result, dict):
-            raise TdfError("Invalid KAS response")
         if status == 403 and result.get("code") == "permission_denied":
             raise AccessDenied("KAS denied access")
         if status != 200:
             raise TdfError(f"KAS {method} returned HTTP {status}")
         return result
 
-    def wrap(self, key: bytes, key_id: str | None) -> tuple[str, str]:
-        request = {"algorithm": "rsa:2048"}
+    def wrap(
+        self, key: bytes, key_id: str | None
+    ) -> tuple[str, str] | tuple[str, str, str]:
+        request: dict[str, str] = {"algorithm": self._algorithm}
         if key_id is not None:
             request["kid"] = key_id
         response = self._post("PublicKey", request)
@@ -141,22 +209,30 @@ class Kas:
             raise TdfError("KAS did not return a key ID and public key")
         if key_id is not None and kid != key_id:
             raise TdfError("KAS returned a different key ID")
-        try:
-            public_key = serialization.load_pem_public_key(pem.encode())
-        except ValueError as exc:
-            raise TdfError("Invalid KAS public key") from exc
+        if self._algorithm == _P256:
+            ephemeral = ec.generate_private_key(ec.SECP256R1())
+            nonce = os.urandom(12)
+            box = _ec_box(ephemeral, _p256_public(pem))
+            return (
+                kid,
+                encode(nonce + box.encrypt(nonce, key, None)),
+                _public_pem(ephemeral.public_key()),
+            )
+        public_key = _public_key(pem)
         if not isinstance(public_key, rsa.RSAPublicKey) or public_key.key_size != 2048:
             raise TdfError("KAS public key must be RSA-2048")
         return kid, encode(public_key.encrypt(key, _oaep()))
 
     def unwrap(self, policy: str, key_access: dict[str, Any]) -> bytes:
-        session = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        public_pem = session.public_key().public_bytes(
-            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        use_ec = self._algorithm == _P256
+        session = (
+            ec.generate_private_key(ec.SECP256R1())
+            if use_ec
+            else rsa.generate_private_key(public_exponent=65537, key_size=2048)
         )
         request = {
             "policy": policy,
-            "clientPublicKey": public_pem.decode("ascii"),
+            "clientPublicKey": _public_pem(session.public_key()),
             "keyAccess": key_access,
         }
         now = int(time.time())
@@ -165,23 +241,37 @@ class Kas:
             "iat": now,
             "exp": now + 60,
         }
-        signing_input = (
-            _jwt_part(b'{"alg":"RS256"}') + b"." + _jwt_part(utf8_json(claims))
-        )
-        signature = session.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+        header = b'{"alg":"ES256"}' if use_ec else b'{"alg":"RS256"}'
+        signing_input = _jwt_part(header) + b"." + _jwt_part(utf8_json(claims))
+        if isinstance(session, ec.EllipticCurvePrivateKey):
+            signer = ec.generate_private_key(ec.SECP256R1())
+            r, s = decode_dss_signature(
+                signer.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+            )
+            signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+        else:
+            signature = session.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
         response = self._post(
             "Rewrap",
             {
                 "signedRequestToken": (
                     signing_input + b"." + _jwt_part(signature)
-                ).decode()
+                ).decode(),
             },
         )
-        encrypted_key = decode(response.get("entityWrappedKey"), 256)
         try:
-            key = session.decrypt(encrypted_key, _oaep())
-        except ValueError as exc:
+            if isinstance(session, ec.EllipticCurvePrivateKey):
+                encrypted = decode(response.get("entityWrappedKey"), _EC_BOX_LENGTH)
+                box = _ec_box(session, _p256_public(response.get("sessionPublicKey")))
+                key = box.decrypt(encrypted[:12], encrypted[12:], None)
+            else:
+                encrypted = decode(response.get("entityWrappedKey"), 256)
+                key = session.decrypt(encrypted, _oaep())
+        except (ValueError, InvalidTag) as exc:
             raise TdfError("Invalid session-wrapped key") from exc
         if len(key) != 32:
             raise TdfError("Expected a 256-bit data key")
         return key
+
+
+Kas = KasConfig

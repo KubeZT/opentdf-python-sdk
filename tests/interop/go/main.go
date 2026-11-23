@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/opentdf/platform/sdk"
@@ -18,6 +19,7 @@ func run(args []string) error {
 	if !validArgs(args) {
 		return fmt.Errorf(`usage:
   go-driver create|open INPUT OUTPUT
+  go-driver create-p256|open-p256 INPUT OUTPUT
   go-driver create-features INPUT OUTPUT METADATA_FILE ATTRIBUTE [ATTRIBUTE ...]
   go-driver open-features INPUT OUTPUT EXPECTED_METADATA_FILE
   go-driver create-assertions INPUT OUTPUT PRIVATE_PEM
@@ -61,7 +63,7 @@ func run(args []string) error {
 	}
 	defer os.Remove(output.Name())
 	defer output.Close()
-	if args[0] == "create" || args[0] == "create-features" || args[0] == "create-assertions" {
+	if strings.HasPrefix(args[0], "create") {
 		err = create(client, input, output, kas.String(), args)
 	} else {
 		err = open(client, input, output, kas.String(), args)
@@ -80,7 +82,7 @@ func validArgs(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "create", "open":
+	case "create", "open", "create-p256", "open-p256":
 		return len(args) == 3
 	case "create-features":
 		return len(args) >= 5
@@ -112,11 +114,17 @@ func create(client *sdk.SDK, input, output *os.File, kas string, args []string) 
 		attributes = []string{attribute}
 	}
 
+	info := sdk.KASInfo{URL: kas, KID: os.Getenv("OTDF_KAS_KEY_ID"), Algorithm: "rsa:2048"}
+	if args[0] == "create-p256" {
+		info.Algorithm = "ec:secp256r1"
+		info.KID = os.Getenv("OTDF_TEST_KAS_EC_KEY_ID")
+		if info.KID == "" {
+			return fmt.Errorf("set OTDF_TEST_KAS_EC_KEY_ID")
+		}
+	}
 	options := []sdk.TDFOption{
 		sdk.WithAutoconfigure(false),
-		sdk.WithKasInformation(sdk.KASInfo{
-			URL: kas, KID: os.Getenv("OTDF_KAS_KEY_ID"), Algorithm: "rsa:2048",
-		}),
+		sdk.WithKasInformation(info),
 		sdk.WithDataAttributes(attributes...),
 		sdk.WithMetaData(string(metadata)),
 		sdk.WithTargetMode("4.3.0"),
@@ -145,6 +153,9 @@ func create(client *sdk.SDK, input, output *os.File, kas string, args []string) 
 
 func open(client *sdk.SDK, input, output *os.File, kas string, args []string) error {
 	options := []sdk.TDFReaderOption{sdk.WithKasAllowlist([]string{kas})}
+	if args[0] == "open-p256" {
+		options = append(options, sdk.WithSessionKeyType("ec:secp256r1"))
+	}
 	if args[0] == "open-assertions" {
 		der, err := readPEM(args[3], "PUBLIC KEY")
 		if err != nil {

@@ -46,7 +46,7 @@ multiple policy attributes. Pass `metadata="your text"` to include encrypted
 UTF-8 metadata. `open_tdf_with_metadata(...)` decrypts the payload and returns
 the metadata if present.
 
-Both profiles support one RSA-2048 KAS grant and payloads up to 2 TiB. The SDK processes regular files in segments and uses ZIP64
+Both profiles support one RSA-2048 or P-256 KAS grant and payloads up to 2 TiB. The SDK processes regular files in segments and uses ZIP64
 when needed. The writer starts with 2 MiB segments and increases the size
 up to 64 MiB for large files. KAS denial raises `AccessDenied` and leaves
 the destination absent. These profiles cover a subset of the TDF
@@ -57,6 +57,21 @@ key to use the TDF's key with HS256, or pass a private RSA PEM in
 `signing_key_pem` for RS256. On open, use `required_assertions` to require
 assertion IDs and `assertion_verification_keys` to supply trusted RS256
 public keys by ID.
+
+## Discover a KAS or use OAuth client credentials
+
+Pass a `KasConfig` as `kas=` to create or open a TDF.
+`KasConfig.discover(platform, token)` reads the configured platform's
+well-known document. It uses the advertised base KAS, or the co-hosted
+KAS when no base key is configured.
+
+For OAuth, use `KasConfig.from_client_credentials(kas, issuer, id, secret)`
+or `KasConfig.discover_with_client_credentials(platform, issuer, id, secret)`.
+Platform discovery checks the configured issuer before using it. OIDC
+discovery keeps token requests on that issuer's origin.
+
+Use `config.with_key_algorithm("ec:secp256r1")` to choose P-256 wrapping
+and rewrap sessions.
 
 ## Use a trusted KAS endpoint for an archived origin
 

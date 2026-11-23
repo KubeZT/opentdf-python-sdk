@@ -37,7 +37,7 @@ def invoke(
     args = [operation, str(source), str(output), *map(str, arguments)]
     if peer == "java":
         args = [f"-Dexec.args={shlex.join(args)}"]
-        if operation in ("open", "open-features", "open-assertions"):
+        if operation in ("open", "open-features", "open-assertions", "open-p256"):
             driver = [*driver[:-2], "exec:java"]
     result = subprocess.run(
         driver + args,
@@ -271,11 +271,11 @@ def compare_feature_archives(
     archives: dict[Path, str],
     original: bytes,
     operation: str,
-    argument: Path,
+    *arguments: Path,
 ) -> None:
     def compare(reader: str, artifact: Path) -> None:
         output = work / f"{artifact.stem}-to-{reader}.bin"
-        invoke(reader, commands[reader], operation, artifact, output, argument)
+        invoke(reader, commands[reader], operation, artifact, output, *arguments)
         if output.read_bytes() != original:
             raise ValueError(f"{artifact.name} to {reader} recovered different bytes")
         print(f"{artifact.stem} → {reader} passed", flush=True)
@@ -290,6 +290,128 @@ def compare_feature_archives(
                 (p for p, profile in archives.items() if profile == JAVA_MANIFEST),
             )
         )
+
+
+def p256_round_trips(
+    work: Path, commands: dict[str, list[str]], source: Path, original: bytes
+) -> None:
+    archives = {}
+    for writer, driver in commands.items():
+        profiles = ("legacy", "spec") if writer in ("rust", "python") else ("legacy",)
+        for profile in profiles:
+            artifact = work / f"{writer}-{profile}-p256.tdf"
+            manifest_name = SPEC_MANIFEST if profile == "spec" else JAVA_MANIFEST
+            invoke(
+                writer,
+                driver,
+                "create-spec-p256" if profile == "spec" else "create-p256",
+                source,
+                artifact,
+            )
+            manifest, _ = read_archive(artifact, manifest_name)
+            (grant,) = manifest["encryptionInformation"]["keyAccess"]
+            if (
+                grant["type"] != "ec-wrapped"
+                or grant["kid"] != os.environ["OTDF_TEST_KAS_EC_KEY_ID"]
+                or not grant["ephemeralPublicKey"].startswith(
+                    "-----BEGIN PUBLIC KEY-----"
+                )
+                or len(base64.b64decode(grant["wrappedKey"], validate=True)) != 60
+            ):
+                raise ValueError(
+                    f"{artifact.name} has an unexpected P-256 key access object"
+                )
+            archives[artifact] = manifest_name
+    compare_feature_archives(work, commands, archives, original, "open-p256")
+
+    artifact = work / "java-legacy-p256.tdf"
+    for reader in ("rust", "python"):
+        output = work / f"{reader}-p256-with-rsa-session.bin"
+        invoke(reader, commands[reader], "open", artifact, output)
+        if output.read_bytes() != original:
+            raise ValueError(
+                f"{reader} did not recover the P-256 TDF with an RSA session"
+            )
+        invoke(
+            reader,
+            commands[reader],
+            "open-p256",
+            artifact,
+            work / f"{reader}-p256-denied.bin",
+            expected_error="PermissionDenied"
+            if reader == "rust"
+            else "KAS denied access",
+            OTDF_ACCESS_TOKEN=os.environ["OTDF_DENIED_ACCESS_TOKEN"],
+        )
+    print("P-256 KAS denial and RSA session compatibility passed", flush=True)
+
+
+def connection_round_trips(
+    work: Path, commands: dict[str, list[str]], source: Path, original: bytes
+) -> None:
+    missing = "https://unused.example.invalid"
+    modes = {
+        "discover": {"OTDF_KAS_URL": missing},
+        "client-credentials": {"OTDF_ACCESS_TOKEN": ""},
+        "discover-client-credentials": {
+            "OTDF_ACCESS_TOKEN": "",
+            "OTDF_KAS_URL": missing,
+        },
+    }
+    for peer in ("rust", "python"):
+        for mode, environment in modes.items():
+            path = work / f"{peer}-{mode}"
+            artifact = path.with_suffix(".tdf")
+            output = path.with_suffix(".bin")
+            invoke(
+                peer,
+                commands[peer],
+                "create",
+                source,
+                artifact,
+                OTDF_TEST_AUTH_MODE=mode,
+                unchanged=None,
+                **environment,
+            )
+            manifest, _ = read_archive(artifact, JAVA_MANIFEST)
+            (grant,) = manifest["encryptionInformation"]["keyAccess"]
+            if grant["url"] != os.environ["OTDF_KAS_URL"]:
+                raise ValueError(f"{peer} wrote an unexpected KAS origin for {mode}")
+            # This also exercises EC session rewrap of an RSA-wrapped grant.
+            invoke(
+                peer,
+                commands[peer],
+                "open-p256",
+                artifact,
+                output,
+                OTDF_TEST_AUTH_MODE=mode,
+                unchanged=None,
+                **environment,
+            )
+            if output.read_bytes() != original:
+                raise ValueError(f"{peer} recovered different bytes using {mode}")
+            print(f"{peer} {mode} passed", flush=True)
+
+        for label, failure in (
+            ("wrong-secret", {"OTDF_CLIENT_SECRET": "invalid-local-client-secret"}),
+            (
+                "wrong-issuer",
+                {"OTDF_TEST_ISSUER": f"{os.environ['OTDF_TEST_ISSUER']}-other"},
+            ),
+        ):
+            invoke(
+                peer,
+                commands[peer],
+                "open",
+                artifact,
+                work / f"{peer}-{label}.bin",
+                expected_error="Error:" if peer == "rust" else "TDF error:",
+                unchanged=None,
+                OTDF_TEST_AUTH_MODE="discover-client-credentials",
+                OTDF_ACCESS_TOKEN="",
+                **failure,
+            )
+    print("Wrong OAuth secret and platform issuer were rejected", flush=True)
 
 
 def feature_round_trips(
@@ -587,6 +709,10 @@ def main() -> None:
             "compile",
             "exec:java",
         ]
+        if os.environ.get("OTDF_TEST_KAS_EC_KEY_ID"):
+            p256_round_trips(work, commands, source, original)
+            if os.environ.get("OTDF_TEST_ISSUER"):
+                connection_round_trips(work, commands, source, original)
         assertion_round_trips(work, commands, source, original)
         archives = {}
         for peer in commands:

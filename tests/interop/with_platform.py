@@ -199,6 +199,9 @@ def prepare_fixtures(
         f"  host: 127.0.0.1\n  port: {platform.rsplit(':', 1)[1]}\n",
     )
     config = checked_replace(config, "  level: debug\n", "  level: info\n")
+    config = checked_replace(
+        config, "      ec_tdf_enabled: false\n", "      ec_tdf_enabled: true\n"
+    )
     config = config.replace("http://localhost:8080", platform).replace(
         "http://localhost:8888", keycloak
     )
@@ -293,41 +296,37 @@ def prepare_fixtures(
     (work / policy_path).write_text(policy)
 
 
-def generate_keys(work: Path, wrapping_key: Path | None) -> None:
-    if wrapping_key is None:
-        subprocess.run(
-            [
-                "openssl",
-                "genpkey",
-                "-algorithm",
-                "RSA",
-                "-pkeyopt",
-                "rsa_keygen_bits:2048",
-                "-out",
-                "kas-private.pem",
-            ],
-            cwd=work,
-            check=True,
-            capture_output=True,
-            timeout=30,
-        )
-    else:
-        destination = work / "kas-private.pem"
-        with os.fdopen(
-            os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
-        ) as key:
-            key.write(wrapping_key.read_bytes())
+def generate_keys(
+    work: Path, wrapping_key: Path | None, ec_wrapping_key: Path | None
+) -> None:
+    for filename, enrolled_key, command in (
+        (
+            "kas-private.pem",
+            wrapping_key,
+            ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"],
+        ),
+        (
+            "kas-ec-private.pem",
+            ec_wrapping_key,
+            ["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:prime256v1"],
+        ),
+    ):
+        if enrolled_key is None:
+            subprocess.run(
+                ["openssl", *command, "-out", filename],
+                cwd=work,
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+        else:
+            with os.fdopen(
+                os.open(work / filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+                "wb",
+            ) as key:
+                key.write(enrolled_key.read_bytes())
     for command in (
         ["rsa", "-in", "kas-private.pem", "-pubout", "-out", "kas-cert.pem"],
-        [
-            "ecparam",
-            "-name",
-            "prime256v1",
-            "-genkey",
-            "-noout",
-            "-out",
-            "kas-ec-private.pem",
-        ],
         [
             "req",
             "-new",
@@ -386,6 +385,7 @@ def platform_site(
     work: Path,
     *,
     wrapping_key: Path | None = None,
+    ec_wrapping_key: Path | None = None,
     exclude_ports: Collection[int] = (),
 ) -> Iterator[dict[str, str]]:
     """Start an isolated test site and return its fixture connection settings."""
@@ -421,7 +421,7 @@ def platform_site(
             )
             platform = f"http://localhost:{listener.getsockname()[1]}"
             prepare_fixtures(source, work, platform, keycloak, db)
-            generate_keys(work, wrapping_key)
+            generate_keys(work, wrapping_key, ec_wrapping_key)
 
             def postgres_ready() -> bool:
                 return (
@@ -499,7 +499,9 @@ def platform_site(
                     "OTDF_PLATFORM_URL": platform,
                     "OTDF_KAS_URL": platform,
                     "OTDF_KAS_KEY_ID": "r1",
+                    "OTDF_TEST_KAS_EC_KEY_ID": "e1",
                     "OTDF_TEST_IDP_URL": keycloak,
+                    "OTDF_TEST_ISSUER": f"{keycloak}/auth/realms/opentdf",
                     "OTDF_TEST_DB_PORT": str(db),
                     "OTDF_ATTRIBUTE": ATTRIBUTE,
                     "OTDF_TEST_ALL_OF_ATTRIBUTES": (

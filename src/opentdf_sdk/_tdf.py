@@ -26,7 +26,7 @@ from ._assertions import (
 )
 from ._json import json_object as _object
 from ._json import parse_object as _parse
-from ._kas import Kas, TdfError, decode, encode, utf8_json
+from ._kas import KasConfig, TdfError, decode, encode, utf8_json, validate_wrapped_key
 
 JAVA_MANIFEST = "0.manifest.json"
 SPEC_MANIFEST = "manifest.json"
@@ -166,12 +166,30 @@ def _writer_segment_plan(length: int, *, spec: bool) -> tuple[int, int]:
     return size, count
 
 
+def _select_kas(
+    kas: KasConfig | None,
+    url: str | None,
+    token: str | None,
+    manifest_origin: str | None,
+) -> KasConfig:
+    if kas is not None:
+        if not isinstance(kas, KasConfig) or any(
+            option is not None for option in (url, token, manifest_origin)
+        ):
+            raise TdfError("Pass either kas or the legacy KAS arguments")
+        return kas
+    if url is None or token is None:
+        raise TdfError("Pass either kas or both kas_url and access_token")
+    return KasConfig(url, token, manifest_kas_url=manifest_origin)
+
+
 def create_tdf(
     source: str | Path,
     destination: str | Path,
     *,
-    kas_url: str,
-    access_token: str,
+    kas_url: str | None = None,
+    access_token: str | None = None,
+    kas: KasConfig | None = None,
     attribute: str | None = None,
     attributes: Sequence[str] | None = None,
     metadata: str | None = None,
@@ -187,8 +205,9 @@ def create_tdf(
     Pass one attribute or a sequence of distinct attributes. Nonempty metadata
     is encrypted with the same key as the payload. Assertion statements are
     stored in the manifest and signed with the data key or a supplied RSA key.
-    Supply manifest_kas_url to record a different KAS origin in the archive.
-    Supports plaintext files up to 2 TiB. HTTP requests use kas_url.
+    Pass a KasConfig or the legacy kas_url and access_token arguments.
+    Supply manifest_kas_url with the legacy arguments to record a different KAS
+    origin in the archive. Supports plaintext files up to 2 TiB.
     """
     if profile not in ("java", "spec"):
         raise TdfError("Unknown TDF ZIP profile")
@@ -217,7 +236,7 @@ def create_tdf(
         )
     )
     prepared = prepare_assertions(assertions, MAX_MANIFEST - len(policy))
-    kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
+    config = _select_kas(kas, kas_url, access_token, manifest_kas_url)
     with (
         _input(source, MAX_PLAINTEXT, "Source exceeded 2 TiB") as (plaintext, length),
         _output(destination) as output,
@@ -228,7 +247,23 @@ def create_tdf(
         encrypted_metadata = _encrypt_metadata(key, metadata)
         if len(policy) + len(encrypted_metadata) > MAX_MANIFEST:
             raise TdfError("Manifest exceeded 4 MiB")
-        kid, wrapped = kas.wrap(key, key_id)
+        kid, wrapped, *ephemeral = config.wrap(key, key_id)
+        key_access = {
+            "type": "ec-wrapped" if ephemeral else "wrapped",
+            "url": config.manifest_url,
+            "protocol": "kas",
+            "kid": kid,
+            "sid": "",
+            "encryptedMetadata": encrypted_metadata,
+            "schemaVersion": "1.0",
+            "wrappedKey": wrapped,
+            "policyBinding": {
+                "alg": "HS256",
+                "hash": encode(_policy_hash(key, policy, spec=spec)),
+            },
+        }
+        if ephemeral:
+            key_access["ephemeralPublicKey"] = ephemeral[0]
         segments: list[dict[str, str | int]] = []
         tags = bytearray()
         aes = algorithms.AES(key)
@@ -290,24 +325,7 @@ def create_tdf(
                     "encryptionInformation": {
                         "type": "split",
                         "policy": policy,
-                        "keyAccess": [
-                            {
-                                "type": "wrapped",
-                                "url": kas.manifest_url,
-                                "protocol": "kas",
-                                "kid": kid,
-                                "sid": "",
-                                "encryptedMetadata": encrypted_metadata,
-                                "schemaVersion": "1.0",
-                                "wrappedKey": wrapped,
-                                "policyBinding": {
-                                    "alg": "HS256",
-                                    "hash": encode(
-                                        _policy_hash(key, policy, spec=spec)
-                                    ),
-                                },
-                            }
-                        ],
+                        "keyAccess": [key_access],
                         "method": {
                             "algorithm": "AES-256-GCM",
                             "isStreamable": True,
@@ -388,7 +406,7 @@ def _check_directory(file: IO[bytes], length: int) -> None:
 def _read(
     archive: ZipFile,
     output: IO[bytes],
-    kas: Kas,
+    kas: KasConfig,
     required_assertions: Sequence[str],
     assertion_verification_keys: Mapping[str, bytes],
 ) -> str | None:
@@ -449,13 +467,13 @@ def _read(
         or not isinstance(keys, list)
         or len(keys) != 1
     ):
-        raise TdfError("Expected AES-256-GCM with one RSA-wrapped key")
+        raise TdfError("Expected AES-256-GCM with one wrapped key")
     key_access = _object(keys[0])
     binding = _object(key_access.get("policyBinding"))
     if key_access.get("url") != kas.manifest_url:
         raise TdfError("Untrusted manifest KAS origin")
     if (
-        key_access.get("type") != "wrapped"
+        key_access.get("type") not in ("wrapped", "ec-wrapped")
         or key_access.get("protocol") != "kas"
         or key_access.get("schemaVersion") != "1.0"
         or key_access.get("sid", "") != ""
@@ -465,7 +483,7 @@ def _read(
     ):
         raise TdfError("Unsupported key access entry")
     metadata_ciphertext = _metadata_ciphertext(key_access.get("encryptedMetadata", ""))
-    decode(key_access.get("wrappedKey"), 256)
+    validate_wrapped_key(key_access)
     binding_hash = decode(binding.get("hash"), 32 if spec else 64)
     if not spec and not re.fullmatch(rb"[0-9a-f]{64}", binding_hash):
         raise TdfError("Invalid policy binding encoding")
@@ -577,8 +595,9 @@ def open_tdf(
     source: str | Path,
     destination: str | Path,
     *,
-    kas_url: str,
-    access_token: str,
+    kas_url: str | None = None,
+    access_token: str | None = None,
+    kas: KasConfig | None = None,
     manifest_kas_url: str | None = None,
     required_assertions: Sequence[str] = (),
     assertion_verification_keys: Mapping[str, bytes] | None = None,
@@ -589,6 +608,7 @@ def open_tdf(
         destination,
         kas_url=kas_url,
         access_token=access_token,
+        kas=kas,
         manifest_kas_url=manifest_kas_url,
         required_assertions=required_assertions,
         assertion_verification_keys=assertion_verification_keys,
@@ -599,21 +619,22 @@ def open_tdf_with_metadata(
     source: str | Path,
     destination: str | Path,
     *,
-    kas_url: str,
-    access_token: str,
+    kas_url: str | None = None,
+    access_token: str | None = None,
+    kas: KasConfig | None = None,
     manifest_kas_url: str | None = None,
     required_assertions: Sequence[str] = (),
     assertion_verification_keys: Mapping[str, bytes] | None = None,
 ) -> str | None:
     """Open a supported TDF ZIP profile and return its metadata if present.
 
-    Only the configured manifest_kas_url, or kas_url by default, is accepted
-    in the key access object. HTTP requests use kas_url.
+    Pass a KasConfig or the legacy kas_url and access_token arguments. The
+    key access object must match the trusted origin in the configuration.
 
     Present assertions must verify. Specify required assertion IDs to require
     their presence and map RS256 assertion IDs to trusted RSA public keys in PEM.
     """
-    kas = Kas(kas_url, access_token, manifest_kas_url=manifest_kas_url)
+    config = _select_kas(kas, kas_url, access_token, manifest_kas_url)
     try:
         with (
             _input(source, MAX_ARCHIVE, "TDF exceeds the archive size limit") as (
@@ -627,7 +648,7 @@ def open_tdf_with_metadata(
                 metadata = _read(
                     archive,
                     output,
-                    kas,
+                    config,
                     required_assertions,
                     assertion_verification_keys or {},
                 )
