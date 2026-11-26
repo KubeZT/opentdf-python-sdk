@@ -39,6 +39,10 @@ test-large:
 test-key-import:
 	"$(PYTHON)" -m pytest -m e2e -s tests/interop/test_key_import.py
 
+.PHONY: test-local-key
+test-local-key:
+	RUST_SDK="$(RUST_SDK)" "$(PYTHON)" -m pytest -m e2e -k local_key -s tests/interop/test_e2e.py
+
 .PHONY: release-packages
 release-packages:
 	"$(PYTHON)" tests/interop/release.py --rust-sdk "$(RUST_SDK)"

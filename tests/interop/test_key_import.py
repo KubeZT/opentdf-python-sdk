@@ -24,9 +24,10 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from opentdf_sdk import AccessDenied, KasConfig, TdfError, create_tdf, open_tdf
 
 if TYPE_CHECKING:
+    import consumers
     import with_platform
 else:
-    from tests.interop import with_platform
+    from tests.interop import consumers, with_platform
 
 PASSWORD = b"disposable-bundle-password"
 ROOT_KEY = bytes(range(32))
@@ -150,6 +151,11 @@ def test_password_key_import_decrypts_with_producer_offline(
 ) -> None:
     with TemporaryDirectory(prefix="bundle-key-import-", dir=tmp_path) as directory:
         work = Path(directory)
+        sdk = Path(__file__).resolve().parents[2]
+        rust_sdk = Path(
+            os.environ.get("RUST_SDK", str(sdk.parent / "opentdf-rust-sdk"))
+        )
+        rust = consumers.rust_consumer(rust_sdk, work, release=False)
         source_path = os.environ.get("OTDF_TEST_PLATFORM_SOURCE")
         source = with_platform.platform_sources(
             Path(source_path) if source_path else None, work
@@ -160,6 +166,13 @@ def test_password_key_import_decrypts_with_producer_offline(
         )
         kid = str(uuid4())
         bundle_key = ec.generate_private_key(ec.SECP256R1())
+        public_path = work / "bundle.pub.pem"
+        public_path.write_bytes(
+            bundle_key.public_key().public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
         private_pem = bundle_key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
@@ -232,6 +245,28 @@ def test_password_key_import_decrypts_with_producer_offline(
                             "encryptionInformation"
                         ]["keyAccess"][0]
                         assert (grant["kid"], grant["url"]) == (kid, original_origin)
+                    artifacts.append(
+                        (archive, hashlib.sha256(archive.read_bytes()).digest())
+                    )
+                    archive = work / f"rust-{profile}.tdf"
+                    subprocess.run(
+                        rust
+                        + [
+                            "create-spec-p256" if profile == "spec" else "create-p256",
+                            str(plaintext),
+                            str(archive),
+                        ],
+                        env={
+                            **os.environ,
+                            **site_a,
+                            "OTDF_TEST_AUTH_MODE": "public-key",
+                            "OTDF_KAS_PUBLIC_KEY_FILE": str(public_path),
+                            "OTDF_TEST_KAS_EC_KEY_ID": kid,
+                            "OTDF_MANIFEST_KAS_URL": "",
+                        },
+                        check=True,
+                        capture_output=True,
+                    )
                     artifacts.append(
                         (archive, hashlib.sha256(archive.read_bytes()).digest())
                     )
@@ -312,6 +347,20 @@ def test_password_key_import_decrypts_with_producer_offline(
                     assert hashlib.sha256(output.read_bytes()).digest() == expected
                     assert hashlib.sha256(archive.read_bytes()).digest() == digest
                     output.unlink()
+                    subprocess.run(
+                        rust + ["open-p256", str(archive), str(output)],
+                        env={
+                            **os.environ,
+                            **site_b,
+                            "OTDF_TEST_AUTH_MODE": "bearer",
+                            "OTDF_MANIFEST_KAS_URL": original_origin,
+                        },
+                        check=True,
+                        capture_output=True,
+                    )
+                    assert hashlib.sha256(output.read_bytes()).digest() == expected
+                    assert hashlib.sha256(archive.read_bytes()).digest() == digest
+                    output.unlink()
                 denied = (
                     KasConfig(endpoint, site_b["OTDF_DENIED_ACCESS_TOKEN"])
                     .with_key_algorithm("ec:secp256r1")
@@ -339,7 +388,8 @@ def test_password_key_import_decrypts_with_producer_offline(
                 assert root_key.hex().encode() not in logs
                 assert b"-----BEGIN PRIVATE KEY-----" not in logs
                 print(
-                    "Native registry import and both TDF profiles decrypted locally; "
+                    "Native registry import and both SDKs/TDF profiles "
+                    "decrypted locally; "
                     "denial controls passed",
                     flush=True,
                 )

@@ -23,6 +23,7 @@ an installed Python wheel, Java `0.19.1`, and Go `sdk/v0.35.0`. See the
 | P-256, multiple attributes, metadata, and signed assertions in one TDF | Spec | Rust, Python | Rust, Python, Go | [Combined round trips](../tests/interop/matrix.py) |
 | RSA and P-256 access with the producer and its IdP offline | Both | Rust, Python | Rust, Python | [Two-site test](../tests/interop/federation.py) |
 | Large-file round trips | Both | Rust, Python | Rust, Python | [Large-payload suite](../tests/interop/large_payloads.py) |
+| Per-bundle P-256 public keys without producer access | Both | Rust, Python | Rust, Python | [Packaged local-key interoperability](../tests/interop/local_key.py) |
 | ZIP64 round trips at 8 GiB + 1 byte | Both | Rust (Java-compatible), Python (Spec) | Rust, Python | [ZIP64 case](../tests/interop/large_payloads.py) |
 
 The pinned Platform requires `services.kas.preview.ec_tdf_enabled` for
