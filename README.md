@@ -43,10 +43,12 @@ multiple policy attributes. Pass `metadata="your text"` to include encrypted
 UTF-8 metadata. `open_tdf_with_metadata(...)` decrypts the payload and returns
 the metadata if present.
 
-Both profiles support one RSA-2048 or P-256 KAS grant and payloads up to
-2 TiB, subject to the 4 MiB manifest limit. The SDK processes regular
-files in segments and uses ZIP64 when needed. The writer starts with 2 MiB segments and increases the size
-up to 64 MiB for large files. KAS denial raises `AccessDenied` and leaves
+Both profiles support one RSA-2048 or P-256 KAS grant. Payload I/O uses fixed
+1 MiB buffers and ZIP64, with no application-level total-byte cap. Segment sizes
+adapt to keep at most 32,768 data segments in the 4 MiB manifest. Each segment
+obeys the AES-GCM data-length bound of 64 GiB minus 32 bytes. These metadata
+and cryptographic bounds imply a finite format capacity of nearly 2 PiB; they
+are not buffers allocated for the payload. KAS denial raises `AccessDenied` and leaves
 the destination absent. These profiles cover a subset of the TDF
 specification.
 
@@ -59,6 +61,11 @@ public keys by ID.
 ## Discover a KAS or use OAuth client credentials
 
 Pass a `KasConfig` as `kas=` to create or open a TDF.
+For a transferable bundle key, use
+`KasConfig.from_public_key(origin, key_id, public_pem)` to encrypt with an
+explicit P-256 public key without contacting KAS. Register the matching private
+key with the receiving KAS before decrypting; this configuration grants no
+decryption access or publisher signing trust.
 `KasConfig.discover(platform, token)` reads the configured platform's
 well-known document. It uses the advertised base KAS, or the co-hosted
 KAS when no base key is configured.

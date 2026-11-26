@@ -32,9 +32,10 @@ Run `make test-conformance` for the shared offline corpus. See the
 | Spec ZIP (explicit) | `manifest.json` | `payload.tdf_spec_version` | Raw digest bytes |
 
 The profiles cover one RSA-2048 or P-256 KAS grant, one or more policy attributes,
-optional encrypted UTF-8 metadata, and regular files. Writers start at 2 MiB per segment and adapt the segment
-size to the payload. The 64 MiB segment limit and the manifest segment
-budget give an effective capacity of 2 TiB. Both write `0.payload`. Spec ZIP readers
+optional encrypted UTF-8 metadata, and regular files. Writers start at 2 MiB per
+segment and adapt segment size while I/O stays in fixed 1 MiB buffers. Segment
+metadata stays bounded, and each GCM invocation is limited to 64 GiB minus 32
+bytes. The former 2 TiB payload cap has been removed. Both write `0.payload`. Spec ZIP readers
 also resolve safe, flat payload member names from the manifest. Go 0.35.0 writes the
 Java-compatible layout and can read both layouts with `0.payload`. Java
 0.19.1 expects the Java-compatible layout.
@@ -54,3 +55,8 @@ tested subset of base TDF.
 Record the revision, license, and checksum of any fixture brought in from
 the [upstream suite](https://github.com/opentdf/tests). Keep credentials and
 generated private keys out of fixtures.
+
+Streaming regression tests measure Python allocation peaks across large authenticated
+segments, admit sparse inputs beyond 2 TiB without processing terabytes in the
+normal suite, and verify cleanup after late authentication failure. This is not
+a claim that a complete multi-terabyte round trip ran in the normal suite.

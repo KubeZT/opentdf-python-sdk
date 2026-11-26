@@ -43,15 +43,12 @@ ZIP_MEMBER_FLAGS = 0x0808
 MAX_MANIFEST = 4 * MIB
 MAX_DATA_SEGMENTS = 32768
 MAX_SEGMENTS = MAX_DATA_SEGMENTS + 1
-MAX_SEGMENT_SIZE = 64 * MIB
-MAX_PLAINTEXT = MAX_SEGMENT_SIZE * MAX_DATA_SEGMENTS
-MAX_ARCHIVE = MAX_PLAINTEXT + MAX_SEGMENTS * OVERHEAD + MAX_MANIFEST + 64 * 1024
+MAX_SEGMENT_SIZE = (1 << 36) - 32
+IO_CHUNK_SIZE = MIB
 
 
 @contextmanager
-def _input(
-    source: str | Path, limit: int, limit_error: str
-) -> Iterator[tuple[BufferedReader, int]]:
+def _input(source: str | Path) -> Iterator[tuple[BufferedReader, int]]:
     # Nonblocking open permits checking a FIFO without waiting for a writer.
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(source, flags)
@@ -59,8 +56,6 @@ def _input(
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
             raise TdfError("Expected a regular input file")
-        if info.st_size > limit:
-            raise TdfError(limit_error)
         with os.fdopen(descriptor, "rb", closefd=False) as file:
             yield file, info.st_size
     finally:
@@ -160,8 +155,13 @@ def _encrypt_metadata(key: bytes, metadata: str | None) -> str:
 
 def _writer_segment_plan(length: int, *, spec: bool) -> tuple[int, int]:
     size_step = MAX_DATA_SEGMENTS * MIB
-    size = max(SEGMENT_SIZE, ((length + size_step - 1) // size_step) * MIB)
+    size = min(
+        MAX_SEGMENT_SIZE,
+        max(SEGMENT_SIZE, ((length + size_step - 1) // size_step) * MIB),
+    )
     full, remainder = divmod(length, size)
+    if full + (remainder > 0) > MAX_DATA_SEGMENTS:
+        raise TdfError("Payload requires too many segments")
     count = full + (remainder > 0 or length == 0 or not spec)
     return size, count
 
@@ -207,7 +207,7 @@ def create_tdf(
     stored in the manifest and signed with the data key or a supplied RSA key.
     Pass a KasConfig or the legacy kas_url and access_token arguments.
     Supply manifest_kas_url with the legacy arguments to record a different KAS
-    origin in the archive. Supports plaintext files up to 2 TiB.
+    origin in the archive. Uses fixed-size I/O buffers independent of payload size.
     """
     if profile not in ("java", "spec"):
         raise TdfError("Unknown TDF ZIP profile")
@@ -238,7 +238,7 @@ def create_tdf(
     prepared = prepare_assertions(assertions, MAX_MANIFEST - len(policy))
     config = _select_kas(kas, kas_url, access_token, manifest_kas_url)
     with (
-        _input(source, MAX_PLAINTEXT, "Source exceeded 2 TiB") as (plaintext, length),
+        _input(source) as (plaintext, length),
         _output(destination) as output,
     ):
         segment_size, segment_count = _writer_segment_plan(length, spec=spec)
@@ -267,29 +267,32 @@ def create_tdf(
         segments: list[dict[str, str | int]] = []
         tags = bytearray()
         aes = algorithms.AES(key)
-        plaintext_buffer = memoryview(bytearray(min(segment_size, length)))
-        encrypted_buffer = memoryview(bytearray(len(plaintext_buffer) + OVERHEAD))
+        plaintext_buffer = memoryview(bytearray(min(IO_CHUNK_SIZE, length)))
+        encrypted_buffer = memoryview(
+            bytearray(len(plaintext_buffer) + AES_BLOCK_SLACK)
+        )
         with ZipFile(output, "w", compression=ZIP_STORED) as archive:
             with archive.open(
                 PAYLOAD, "w", force_zip64=payload_length > ZIP64_LIMIT
             ) as payload:
                 for index in range(segment_count):
                     size = min(segment_size, length - index * segment_size)
-                    segment = plaintext_buffer[:size]
-                    if plaintext.readinto(segment) != size:
-                        raise TdfError("Source size changed while reading")
                     nonce = (index + 1).to_bytes(NONCE_SIZE, "big")
                     encryptor = Cipher(aes, modes.GCM(nonce)).encryptor()
-                    encrypted_buffer[:NONCE_SIZE] = nonce
-                    # The tag space also supplies the AES block slack for update_into.
-                    encrypted_size = size + OVERHEAD
-                    written = encryptor.update_into(
-                        segment, encrypted_buffer[NONCE_SIZE:encrypted_size]
-                    )
+                    payload.write(nonce)
+                    remaining = size
+                    while remaining:
+                        amount = min(remaining, IO_CHUNK_SIZE)
+                        segment = plaintext_buffer[:amount]
+                        if plaintext.readinto(segment) != amount:
+                            raise TdfError("Source size changed while reading")
+                        written = encryptor.update_into(segment, encrypted_buffer)
+                        payload.write(encrypted_buffer[:written])
+                        remaining -= amount
                     encryptor.finalize()
                     tag = encryptor.tag
-                    encrypted_buffer[NONCE_SIZE + written : encrypted_size] = tag
-                    payload.write(encrypted_buffer[:encrypted_size])
+                    payload.write(tag)
+                    encrypted_size = size + OVERHEAD
                     tags.extend(tag)
                     segments.append(
                         {
@@ -572,8 +575,7 @@ def _read(
             (size, encrypted_size, decode(segment.get("hash"), 16))
         )
     if (
-        sum(size for size, _, _ in validated_segments) > MAX_PLAINTEXT
-        or sum(size for _, size, _ in validated_segments)
+        sum(size for _, size, _ in validated_segments)
         != archive.getinfo(payload_name).file_size
     ):
         raise TdfError("Invalid payload size")
@@ -601,24 +603,30 @@ def _read(
                 or None
             )
         aes = algorithms.AES(key)
-        largest_segment = max(size for size, _, _ in validated_segments)
-        encrypted_buffer = memoryview(bytearray(largest_segment + OVERHEAD))
-        plaintext_buffer = memoryview(bytearray(largest_segment + AES_BLOCK_SLACK))
-        for _, size, tag in validated_segments:
-            chunk = encrypted_buffer[:size]
-            if encrypted.readinto(chunk) != size or not hmac.compare_digest(
-                chunk[-TAG_SIZE:], tag
-            ):
+        largest_chunk = min(
+            IO_CHUNK_SIZE, max(size for size, _, _ in validated_segments)
+        )
+        encrypted_buffer = memoryview(bytearray(largest_chunk))
+        plaintext_buffer = memoryview(bytearray(largest_chunk + AES_BLOCK_SLACK))
+        for size, _, tag in validated_segments:
+            nonce = encrypted.read(NONCE_SIZE)
+            if len(nonce) != NONCE_SIZE:
                 raise TdfError("Segment framing or integrity check failed")
-            nonce = chunk[:NONCE_SIZE]
             if metadata_nonce is not None and nonce == metadata_nonce:
                 raise TdfError("Metadata and payload reuse a nonce")
             decryptor = Cipher(aes, modes.GCM(nonce, tag)).decryptor()
-            written = decryptor.update_into(
-                chunk[NONCE_SIZE:-TAG_SIZE], plaintext_buffer
-            )
+            remaining = size
+            while remaining:
+                amount = min(remaining, IO_CHUNK_SIZE)
+                chunk = encrypted_buffer[:amount]
+                if encrypted.readinto(chunk) != amount:
+                    raise TdfError("Segment framing or integrity check failed")
+                written = decryptor.update_into(chunk, plaintext_buffer)
+                output.write(plaintext_buffer[:written])
+                remaining -= amount
+            if not hmac.compare_digest(encrypted.read(TAG_SIZE), tag):
+                raise TdfError("Segment framing or integrity check failed")
             decryptor.finalize()
-            output.write(plaintext_buffer[:written])
         return metadata
 
 
@@ -675,10 +683,7 @@ def open_tdf_with_metadata(
         raise TdfError("Invalid assertion verification key ID")
     try:
         with (
-            _input(source, MAX_ARCHIVE, "TDF exceeds the archive size limit") as (
-                content,
-                length,
-            ),
+            _input(source) as (content, length),
             _output(destination) as output,
         ):
             _check_directory(content, length)

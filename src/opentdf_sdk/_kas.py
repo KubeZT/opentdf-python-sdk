@@ -24,7 +24,7 @@ from ._kas_auth import (
 )
 
 KasAlgorithm = Literal["rsa:2048", "ec:secp256r1"]
-_P256 = "ec:secp256r1"
+_P256: Literal["ec:secp256r1"] = "ec:secp256r1"
 _EC_BOX_LENGTH = 12 + 32 + 16
 _TDF_SALT = hashlib.sha256(b"TDF").digest()
 
@@ -115,7 +115,10 @@ class KasConfig:
         self._configure(url, bearer_token(token), manifest_kas_url)
 
     def _configure(
-        self, url: str, source: str | ClientCredentials, manifest_kas_url: str | None
+        self,
+        url: str,
+        source: str | ClientCredentials | None,
+        manifest_kas_url: str | None,
     ) -> None:
         self._endpoint = split_url(url, purpose="KAS origin")
         if manifest_kas_url is not None:
@@ -125,6 +128,19 @@ class KasConfig:
         ).removesuffix("/")
         self._source = source
         self._algorithm: KasAlgorithm = "rsa:2048"
+        self._wrapping_key: tuple[str, str] | None = None
+
+    @classmethod
+    def from_public_key(cls, origin: str, key_id: str, public_key: str) -> "KasConfig":
+        """Encrypt with an explicit P-256 wrapping key without contacting its KAS."""
+        if not isinstance(key_id, str) or not key_id:
+            raise TdfError("Invalid KAS key ID")
+        _p256_public(public_key)
+        config = cls.__new__(cls)
+        config._configure(origin, None, None)
+        config._algorithm = _P256
+        config._wrapping_key = key_id, public_key
+        return config
 
     @classmethod
     def from_client_credentials(
@@ -178,6 +194,8 @@ class KasConfig:
         return self._manifest_url
 
     def _post(self, method: str, body: dict[str, Any]) -> dict[str, Any]:
+        if self._source is None:
+            raise TdfError("KAS credentials are required for this operation")
         token = self._source if isinstance(self._source, str) else self._source.token()
         status, result = request_json(
             self._endpoint,
@@ -205,8 +223,11 @@ class KasConfig:
             if not isinstance(key_id, str) or not key_id:
                 raise TdfError("Invalid KAS key ID")
             request["kid"] = key_id
-        response = self._post("PublicKey", request)
-        kid, pem = response.get("kid"), response.get("publicKey")
+        if self._wrapping_key is None:
+            response = self._post("PublicKey", request)
+            kid, pem = response.get("kid"), response.get("publicKey")
+        else:
+            kid, pem = self._wrapping_key
         if not isinstance(kid, str) or not kid or not isinstance(pem, str):
             raise TdfError("KAS did not return a key ID and public key")
         if key_id is not None and kid != key_id:

@@ -1,9 +1,11 @@
 import base64
 import errno
+import hashlib
 import hmac
 import json
 import os
 import struct
+import tracemalloc
 import zipfile
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -425,14 +427,11 @@ def test_kas_denial_leaves_no_output(
     assert not dest.exists()
 
 
-def test_rejects_oversized_source(tmp_path: Path) -> None:
-    source = tmp_path / "source.bin"
-    with source.open("wb") as stream:
-        stream.truncate(2 * 1024**4 + 1)
-    dest = tmp_path / "out.tdf"
-    with pytest.raises(TdfError, match="2 TiB"):
-        _create(source, dest)
-    assert not dest.exists()
+def test_segment_plan_enforces_the_gcm_data_length_bound() -> None:
+    with pytest.raises(TdfError, match="segment"):
+        _tdf._writer_segment_plan(
+            ((1 << 36) - 32) * _tdf.MAX_DATA_SEGMENTS + 1, spec=True
+        )
 
 
 def test_extra_members_are_rejected_before_kas(tmp_path: Path) -> None:
@@ -717,13 +716,14 @@ def test_rejects_nonregular_input(
     assert not destination.exists()
 
 
-def test_inclusive_plaintext_limit_reaches_key_access(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("length", [2 * 1024**4, 2 * 1024**4 + 1, 3 * 1024**4])
+def test_multiterabyte_input_reaches_key_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, length: int
 ) -> None:
     source = tmp_path / "input.bin"
     destination = tmp_path / "archive.tdf"
     with source.open("wb") as stream:
-        stream.truncate(2 * 1024**4)
+        stream.truncate(length)
 
     def stop_before_encrypting(
         kas: Kas, data_key: bytes, key_id: str | None
@@ -755,7 +755,7 @@ def test_reader_enforces_metadata_limits_before_kas(
     if limit == "segment_count":
         integrity["segments"] *= 32770
     elif limit == "segment_size":
-        integrity["segmentSizeDefault"] = 64 * 1024**2 + 1
+        integrity["segmentSizeDefault"] = (1 << 36) - 31
         integrity["encryptedSegmentSizeDefault"] = integrity["segmentSizeDefault"] + 28
     manifest_bytes = json.dumps(manifest).encode()
     if limit == "manifest":
@@ -772,12 +772,20 @@ def test_reader_enforces_metadata_limits_before_kas(
     assert not list(tmp_path.glob(".tdf-*"))
 
 
-def test_oversized_archive_is_rejected_before_zip_parsing(tmp_path: Path) -> None:
+def test_multiterabyte_archive_reaches_directory_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     archive = tmp_path / "oversized.tdf"
     output = tmp_path / "out.bin"
     with archive.open("wb") as file:
-        file.truncate(2 * 1024**4 + 32769 * 28 + 4 * 1024**2 + 64 * 1024 + 1)
-    with pytest.raises(TdfError, match="archive size limit"):
+        file.truncate(3 * 1024**4)
+
+    def checked_directory(content: object, length: int) -> None:
+        assert length == 3 * 1024**4
+        raise TdfError("Reached directory validation")
+
+    monkeypatch.setattr(_tdf, "_check_directory", checked_directory)
+    with pytest.raises(TdfError, match="Reached directory validation"):
         _open(archive, output)
     assert not output.exists()
 
@@ -789,6 +797,8 @@ def test_oversized_archive_is_rejected_before_zip_parsing(tmp_path: Path) -> Non
         (64 * 1024**3 + 1, 3 * 1024**2, 21846, 21846),
         (256 * 1024**3, 8 * 1024**2, 32769, 32768),
         (2 * 1024**4, 64 * 1024**2, 32769, 32768),
+        (3 * 1024**4, 96 * 1024**2, 32769, 32768),
+        (128 * 1024**4, 4 * 1024**3, 32769, 32768),
     ],
 )
 def test_adaptive_segment_plan(
@@ -799,18 +809,20 @@ def test_adaptive_segment_plan(
 
 
 @settings(max_examples=160, derandomize=True)
-@given(length=st.integers(min_value=0, max_value=_tdf.MAX_PLAINTEXT))
+@given(
+    length=st.integers(min_value=0, max_value=((1 << 36) - 32) * _tdf.MAX_DATA_SEGMENTS)
+)
 def test_segment_plan_preserves_lengths_and_limits(length: int) -> None:
     _assert_segment_plan(length)
 
 
 def test_segment_plan_at_every_size_transition() -> None:
     step = 32 * 1024**3
-    for boundary in range(2 * step, _tdf.MAX_PLAINTEXT, step):
+    for boundary in range(2 * step, (((1 << 36) - 32) * _tdf.MAX_DATA_SEGMENTS), step):
         for length in (boundary - 1, boundary, boundary + 1):
             _assert_segment_plan(length)
-    _assert_segment_plan(_tdf.MAX_PLAINTEXT - 1)
-    _assert_segment_plan(_tdf.MAX_PLAINTEXT)
+    _assert_segment_plan((((1 << 36) - 32) * _tdf.MAX_DATA_SEGMENTS) - 1)
+    _assert_segment_plan(((1 << 36) - 32) * _tdf.MAX_DATA_SEGMENTS)
 
 
 def _assert_segment_plan(length: int) -> None:
@@ -819,7 +831,7 @@ def _assert_segment_plan(length: int) -> None:
     mib = 1024**2
 
     assert java_size == size
-    assert size % mib == 0
+    assert size % mib == 0 or size == (1 << 36) - 32
     assert _SEGMENT_SIZE <= size <= _tdf.MAX_SEGMENT_SIZE
     if size > _SEGMENT_SIZE:
         assert length > (size - mib) * _tdf.MAX_DATA_SEGMENTS
@@ -1028,3 +1040,79 @@ def test_rsa_assertion_cannot_be_replayed_on_another_payload(
             assertion_verification_keys={"publisher": public_key},
         )
     assert not destination.exists()
+
+
+@pytest.mark.parametrize("operation", ["create", "open"])
+@pytest.mark.parametrize("profile", ["java", "spec"])
+def test_payload_buffers_stay_bounded_across_large_segments(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    profile: Literal["java", "spec"],
+) -> None:
+    segment_size = 16 * 1024**2
+
+    def large_segment(length: int, *, spec: bool) -> tuple[int, int]:
+        full, remainder = divmod(length, segment_size)
+        return segment_size, full + (remainder > 0 or length == 0 or not spec)
+
+    monkeypatch.setattr(_tdf, "_writer_segment_plan", large_segment)
+    with TemporaryDirectory(dir=tmp_path) as directory:
+        source = Path(directory) / "input.bin"
+        archive = Path(directory) / "archive.tdf"
+        output = Path(directory) / "out.bin"
+        block = b"x" * (1024**2)
+        with source.open("wb") as file:
+            for _ in range(16):
+                file.write(block)
+            file.write(b"tail")
+        if operation == "open":
+            _create(source, archive, profile)
+        tracemalloc.start()
+        try:
+            if operation == "create":
+                _create(source, archive, profile)
+            else:
+                _open(archive, output)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 8 * 1024**2
+        if operation == "create":
+            _open(archive, output)
+
+        def digest(path: Path) -> bytes:
+            value = hashlib.sha256()
+            with path.open("rb") as file:
+                for data in iter(lambda: file.read(1024**2), b""):
+                    value.update(data)
+            return value.digest()
+
+        assert digest(output) == digest(source)
+
+
+@pytest.mark.parametrize("profile", ["java", "spec"])
+def test_streamed_late_authentication_failure_publishes_no_plaintext(
+    tmp_path: Path,
+    local_key: Callable[[], bytes],
+    profile: Literal["java", "spec"],
+) -> None:
+    with TemporaryDirectory(dir=tmp_path) as directory:
+        root = Path(directory)
+        source = root / "input.bin"
+        archive = root / "archive.tdf"
+        corrupt = root / "corrupt.tdf"
+        output = root / "output.bin"
+        source.write_bytes(b"x" * (2 * 1024**2 + 13))
+        _create(source, archive, profile)
+        manifest_name = "manifest.json" if profile == "spec" else "0.manifest.json"
+        with ZipFile(archive) as original, ZipFile(corrupt, "w") as changed:
+            payload = bytearray(original.read("0.payload"))
+            payload[-17] ^= 1
+            changed.writestr("0.payload", payload)
+            changed.writestr(manifest_name, original.read(manifest_name))
+        with pytest.raises(TdfError, match="unauthenticated"):
+            _open(corrupt, output)
+        assert not output.exists()
+        assert not list(root.glob(".tdf-*"))
